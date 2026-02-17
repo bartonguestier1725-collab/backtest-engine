@@ -1,0 +1,20 @@
+[project]
+name = "backtest-engine"
+version = "0.1.0"
+description = "Numba-accelerated backtesting engine for trading strategies"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.2,<2.4",
+    "numba>=0.61",
+    "pandas>=2.2",
+    "scipy>=1.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
