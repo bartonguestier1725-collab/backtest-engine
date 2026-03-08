@@ -59,7 +59,7 @@ class TestPresets:
         bc = BrokerCost.fundora()
         assert "EURUSD" in bc.spreads
         assert bc.commission_per_lot == 0.0
-        assert len(bc.spreads) == 27
+        assert len(bc.spreads) == 28  # 27 FX pairs + XAUUSD
         # Fundora spreads should be wider than Tradeview
         tv = BrokerCost.tradeview_ilc()
         assert bc.spreads["EURUSD"] > tv.spreads["EURUSD"]

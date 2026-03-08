@@ -105,11 +105,16 @@ class BrokerCost:
             "EURCAD": 0.00016, "GBPCAD": 0.00018, "CADCHF": 0.00016,
             "CADJPY": 0.016, "CHFJPY": 0.016, "NZDJPY": 0.016,
             "GBPCHF": 0.00018, "AUDCHF": 0.00016, "NZDCHF": 0.00018,
+            # Metals — pip_size=0.01, pip_value=$1.00/lot
+            "XAUUSD": 0.40,
         }
         pip_sizes = {}
         pip_values = {}
         for inst in spreads:
-            if inst.endswith("JPY"):
+            if inst == "XAUUSD":
+                pip_sizes[inst] = 0.01
+                pip_values[inst] = 1.0
+            elif inst.endswith("JPY"):
                 pip_sizes[inst] = 0.01
                 pip_values[inst] = 6.67
             else:
