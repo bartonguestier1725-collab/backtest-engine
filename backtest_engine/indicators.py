@@ -137,6 +137,88 @@ def rci(close: np.ndarray, period: int) -> np.ndarray:
 
 
 @numba.njit(cache=True)
+def parabolic_sar(
+    high: np.ndarray,
+    low: np.ndarray,
+    af_start: float = 0.02,
+    af_step: float = 0.02,
+    af_max: float = 0.20,
+) -> tuple:
+    """Parabolic SAR (Wilder).
+
+    Returns (sar, trend, sar_stop) where:
+      sar      : float64 array of SAR values (post-reversal, for charting)
+      trend    : int8 array (1=uptrend, -1=downtrend)
+      sar_stop : float64 array of pre-reversal SAR (for trailing stop use)
+                 On reversal bars, sar_stop has the computed SAR level BEFORE
+                 it jumps to the extreme point. Use this for exit price.
+    """
+    n = len(high)
+    sar = np.empty(n, dtype=np.float64)
+    trend = np.empty(n, dtype=np.int8)
+    sar_stop = np.empty(n, dtype=np.float64)
+
+    # Initialise: assume uptrend starting at first bar
+    sar[0] = low[0]
+    sar_stop[0] = low[0]
+    trend[0] = 1
+    ep = high[0]   # extreme point
+    af = af_start
+
+    for i in range(1, n):
+        prev_sar = sar[i - 1]
+
+        if trend[i - 1] == 1:
+            # --- Uptrend ---
+            new_sar = prev_sar + af * (ep - prev_sar)
+            # Clamp: SAR must not be above prior two lows
+            new_sar = min(new_sar, low[i - 1])
+            if i >= 2:
+                new_sar = min(new_sar, low[i - 2])
+
+            # Store pre-reversal SAR for trailing stop
+            sar_stop[i] = new_sar
+
+            if low[i] < new_sar:
+                # Reversal to downtrend
+                trend[i] = -1
+                sar[i] = ep          # SAR flips to extreme point
+                ep = low[i]
+                af = af_start
+            else:
+                trend[i] = 1
+                sar[i] = new_sar
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + af_step, af_max)
+        else:
+            # --- Downtrend ---
+            new_sar = prev_sar + af * (ep - prev_sar)
+            # Clamp: SAR must not be below prior two highs
+            new_sar = max(new_sar, high[i - 1])
+            if i >= 2:
+                new_sar = max(new_sar, high[i - 2])
+
+            # Store pre-reversal SAR for trailing stop
+            sar_stop[i] = new_sar
+
+            if high[i] > new_sar:
+                # Reversal to uptrend
+                trend[i] = 1
+                sar[i] = ep
+                ep = high[i]
+                af = af_start
+            else:
+                trend[i] = -1
+                sar[i] = new_sar
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + af_step, af_max)
+
+    return sar, trend, sar_stop
+
+
+@numba.njit(cache=True)
 def expanding_quantile(data: np.ndarray, value: np.ndarray) -> np.ndarray:
     """Expanding quantile: percentile rank of value[i] within data[0:i+1].
 

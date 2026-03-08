@@ -22,6 +22,7 @@ def _sim_rr_inner(
     max_hold,
     be_trigger_pct,
     retrace_pct, retrace_timeout,
+    open_prices, use_open_entry,
 ):
     """Fixed Risk-Reward simulation: SL / TP / timeout / breakeven."""
     n_trades = len(signal_bars)
@@ -78,16 +79,31 @@ def _sim_rr_inner(
                 exit_bar[t] = sig_bar
                 continue
         else:
-            # Market order: enter at next bar open ≈ close[signal_bar]
-            entry_price = ref_price
-            entry_bar[t] = sig_bar
+            if use_open_entry:
+                e_bar = sig_bar + 1
+                if e_bar >= n_bars:
+                    pnl_r[t] = 0.0
+                    hold_bars[t] = 0
+                    exit_type[t] = EXIT_NO_FILL
+                    mfe_r[t] = 0.0
+                    mae_r[t] = 0.0
+                    entry_bar[t] = sig_bar
+                    exit_bar[t] = sig_bar
+                    continue
+                entry_price = open_prices[e_bar]
+                entry_bar[t] = e_bar
+            else:
+                # Market order: enter at current bar close (backward compat)
+                entry_price = ref_price
+                entry_bar[t] = sig_bar
 
         # --- SL / TP prices ---
+        sl_ref_price = entry_price if use_open_entry and not use_retrace else ref_price
         if direction == LONG:
-            sl_price_orig = ref_price - sl_dist
+            sl_price_orig = sl_ref_price - sl_dist
             tp_price = entry_price + tp_dist
         else:
-            sl_price_orig = ref_price + sl_dist
+            sl_price_orig = sl_ref_price + sl_dist
             tp_price = entry_price - tp_dist
 
         # --- Bar loop ---
@@ -96,7 +112,11 @@ def _sim_rr_inner(
         best_mfe = 0.0
         worst_mae = 0.0
         trade_closed = False
-        start_bar = entry_bar[t] + 1
+        # When we enter on the next bar open, the remainder of that entry bar
+        # is already "live" and can hit SL/TP. Close-entry and retrace-fill
+        # paths keep the older behavior because intra-bar post-fill ordering is
+        # unknowable from OHLC alone.
+        start_bar = entry_bar[t] if (use_open_entry and not use_retrace) else entry_bar[t] + 1
         end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
 
         for b in range(start_bar, end_bar):
@@ -501,6 +521,224 @@ def _sim_custom_inner(
     return pnl_r, hold_bars, exit_type, mfe_r, mae_r, entry_bar, exit_bar
 
 
+@numba.njit(cache=True)
+def _sim_sar_trailing_inner(
+    high, low, close, open_prices,
+    signal_bars, directions, sl_distances, tp_distances,
+    max_hold,
+    sar_values,
+    use_open_entry,
+):
+    """SAR-based trailing stop with direction-aware logic (B-plan fix).
+
+    Compares SAR to close[b-1] each bar to determine its role:
+      - SAR on the "correct" side of price -> trailing SL (tightens toward price).
+      - SAR on the "wrong" side of price  -> TP target (price must reach SAR).
+    Pessimistic: hard SL checked before SAR TP on every bar.
+
+    Parameters
+    ----------
+    open_prices : bar-open array.  Used for entry when *use_open_entry* is True.
+    use_open_entry : If True, enter at open_prices[sig_bar+1].
+                     If False, enter at close[sig_bar] (backward compat).
+    """
+    n_trades = len(signal_bars)
+    pnl_r     = np.empty(n_trades, dtype=np.float64)
+    hold_bars = np.empty(n_trades, dtype=np.int32)
+    exit_type = np.empty(n_trades, dtype=np.int8)
+    mfe_r     = np.empty(n_trades, dtype=np.float64)
+    mae_r     = np.empty(n_trades, dtype=np.float64)
+    entry_bar = np.empty(n_trades, dtype=np.int32)
+    exit_bar  = np.empty(n_trades, dtype=np.int32)
+
+    n_bars = len(close)
+
+    for t in range(n_trades):
+        sig_bar   = signal_bars[t]
+        direction = directions[t]
+        sl_dist   = sl_distances[t]
+        tp_dist   = tp_distances[t]
+
+        # ── Entry ────────────────────────────────────────────
+        if use_open_entry:
+            e_bar = sig_bar + 1
+            if e_bar >= n_bars:
+                pnl_r[t]     = 0.0
+                hold_bars[t] = 0
+                exit_type[t] = EXIT_NO_FILL
+                mfe_r[t]     = 0.0
+                mae_r[t]     = 0.0
+                entry_bar[t] = sig_bar
+                exit_bar[t]  = sig_bar
+                continue
+            entry_price  = open_prices[e_bar]
+            entry_bar[t] = e_bar
+        else:
+            entry_price  = close[sig_bar]
+            entry_bar[t] = sig_bar
+
+        # ── Hard SL / TP prices ──────────────────────────────
+        if direction == LONG:
+            hard_sl  = entry_price - sl_dist
+            tp_price = entry_price + tp_dist
+        else:
+            hard_sl  = entry_price + sl_dist
+            tp_price = entry_price - tp_dist
+
+        best_mfe     = 0.0
+        worst_mae    = 0.0
+        trade_closed = False
+        start_bar    = entry_bar[t] if use_open_entry else entry_bar[t] + 1
+        end_bar      = min(entry_bar[t] + max_hold + 1, n_bars)
+
+        for b in range(start_bar, end_bar):
+            sar_val = sar_values[b]
+            ref     = close[b - 1]       # previous bar close
+
+            if direction == LONG:
+                # ── LONG ─────────────────────────────────────
+                if sar_val <= ref:
+                    # SAR below price -> normal trailing SL
+                    current_sl    = max(hard_sl, sar_val)
+                    sar_triggered = (sar_val > hard_sl)
+                    if low[b] <= current_sl:
+                        pnl_r[t]     = (current_sl - entry_price) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_TRAIL if sar_triggered else EXIT_SL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (high[b] - entry_price) / sl_dist
+                        bar_mae = (low[b] - entry_price) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+                else:
+                    # SAR above price -> TP target (counter-trend / SAR flip)
+                    # Pessimistic: hard SL first
+                    if low[b] <= hard_sl:
+                        pnl_r[t]     = (hard_sl - entry_price) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_SL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (high[b] - entry_price) / sl_dist
+                        bar_mae = (low[b] - entry_price) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+                    # Price must RISE to SAR
+                    if high[b] >= sar_val:
+                        pnl_r[t]     = (sar_val - entry_price) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_TRAIL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (high[b] - entry_price) / sl_dist
+                        bar_mae = (low[b] - entry_price) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+
+                # Explicit TP (if SAR didn't trigger)
+                if not trade_closed and high[b] >= tp_price:
+                    pnl_r[t]     = (tp_price - entry_price) / sl_dist
+                    hold_bars[t] = b - entry_bar[t]
+                    exit_type[t] = EXIT_TP
+                    exit_bar[t]  = b
+                    trade_closed = True
+                    bar_mfe = (high[b] - entry_price) / sl_dist
+                    bar_mae = (low[b] - entry_price) / sl_dist
+                    if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                    if bar_mae < worst_mae: worst_mae = bar_mae
+                    break
+
+            else:
+                # ── SHORT ────────────────────────────────────
+                if sar_val >= ref:
+                    # SAR above price -> normal trailing SL
+                    current_sl    = min(hard_sl, sar_val)
+                    sar_triggered = (sar_val < hard_sl)
+                    if high[b] >= current_sl:
+                        pnl_r[t]     = (entry_price - current_sl) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_TRAIL if sar_triggered else EXIT_SL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (entry_price - low[b]) / sl_dist
+                        bar_mae = (entry_price - high[b]) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+                else:
+                    # SAR below price -> TP target
+                    # Pessimistic: hard SL first
+                    if high[b] >= hard_sl:
+                        pnl_r[t]     = (entry_price - hard_sl) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_SL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (entry_price - low[b]) / sl_dist
+                        bar_mae = (entry_price - high[b]) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+                    # Price must FALL to SAR
+                    if low[b] <= sar_val:
+                        pnl_r[t]     = (entry_price - sar_val) / sl_dist
+                        hold_bars[t] = b - entry_bar[t]
+                        exit_type[t] = EXIT_TRAIL
+                        exit_bar[t]  = b
+                        trade_closed = True
+                        bar_mfe = (entry_price - low[b]) / sl_dist
+                        bar_mae = (entry_price - high[b]) / sl_dist
+                        if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                        if bar_mae < worst_mae: worst_mae = bar_mae
+                        break
+
+                # Explicit TP (if SAR didn't trigger)
+                if not trade_closed and low[b] <= tp_price:
+                    pnl_r[t]     = (entry_price - tp_price) / sl_dist
+                    hold_bars[t] = b - entry_bar[t]
+                    exit_type[t] = EXIT_TP
+                    exit_bar[t]  = b
+                    trade_closed = True
+                    bar_mfe = (entry_price - low[b]) / sl_dist
+                    bar_mae = (entry_price - high[b]) / sl_dist
+                    if bar_mfe > best_mfe:  best_mfe  = bar_mfe
+                    if bar_mae < worst_mae: worst_mae = bar_mae
+                    break
+
+            # ── MFE / MAE (no exit this bar) ─────────────────
+            if direction == LONG:
+                bar_mfe = (high[b] - entry_price) / sl_dist
+                bar_mae = (low[b] - entry_price) / sl_dist
+            else:
+                bar_mfe = (entry_price - low[b]) / sl_dist
+                bar_mae = (entry_price - high[b]) / sl_dist
+            if bar_mfe > best_mfe:
+                best_mfe = bar_mfe
+            if bar_mae < worst_mae:
+                worst_mae = bar_mae
+
+        # ── Timeout ──────────────────────────────────────────
+        if not trade_closed:
+            last_bar = end_bar - 1 if end_bar <= n_bars else n_bars - 1
+            exit_price = close[last_bar]
+            if direction == LONG:
+                pnl_r[t] = (exit_price - entry_price) / sl_dist
+            else:
+                pnl_r[t] = (entry_price - exit_price) / sl_dist
+            hold_bars[t] = last_bar - entry_bar[t]
+            exit_type[t] = EXIT_TIME
+            exit_bar[t]  = last_bar
+
+        mfe_r[t] = best_mfe
+        mae_r[t] = worst_mae
+
+    return pnl_r, hold_bars, exit_type, mfe_r, mae_r, entry_bar, exit_bar
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -524,6 +762,9 @@ def simulate_trades(
     trail_distance_r: float = 0.0,
     # Custom mode options
     exit_signals: np.ndarray | None = None,
+    # SAR trailing mode options
+    sar_values: np.ndarray | None = None,
+    open_prices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Simulate trades and return a structured array of results.
 
@@ -535,13 +776,17 @@ def simulate_trades(
     sl_distances : 1-D float64 array of stop-loss distances from ref_price.
     tp_distances : 1-D float64 array of take-profit distances from entry.
     max_hold : Maximum bars to hold a trade before timeout.
-    exit_mode : "rr" (fixed RR), "trailing", or "custom".
+    exit_mode : "rr" (fixed RR), "trailing", "custom", or "sar_trailing".
     be_trigger_pct : Fraction of TP distance that triggers breakeven (0=disabled).
     retrace_pct : Fraction of TP distance for limit entry (0=market order).
     retrace_timeout : Max bars to wait for limit fill (0=unlimited).
     trail_activation_r : R-multiple to activate trailing stop.
     trail_distance_r : R-multiple distance for trailing stop.
     exit_signals : Boolean array (same length as close) for custom exits.
+    sar_values : Pre-computed Parabolic SAR array for sar_trailing mode.
+    open_prices : Optional bar-open prices for next-bar-open entry.
+                  Supported for "rr" and "sar_trailing".
+                  If None, falls back to close[sig_bar] entry (backward compat).
 
     Returns
     -------
@@ -569,12 +814,21 @@ def simulate_trades(
 
     # --- Dispatch to appropriate kernel ---
     if exit_mode == "rr":
+        if open_prices is not None:
+            open_arr = np.ascontiguousarray(open_prices, dtype=np.float64)
+            if len(open_arr) != n_bars:
+                raise ValueError("open_prices must have same length as price arrays")
+            use_open_entry = True
+        else:
+            open_arr = close          # dummy — unused when use_open_entry=False
+            use_open_entry = False
         result_tuple = _sim_rr_inner(
             high, low, close,
             signal_bars, directions, sl_distances, tp_distances,
             max_hold,
             be_trigger_pct,
             retrace_pct, retrace_timeout,
+            open_arr, use_open_entry,
         )
     elif exit_mode == "trailing":
         result_tuple = _sim_trailing_inner(
@@ -582,6 +836,27 @@ def simulate_trades(
             signal_bars, directions, sl_distances, tp_distances,
             max_hold,
             trail_activation_r, trail_distance_r,
+        )
+    elif exit_mode == "sar_trailing":
+        if sar_values is None:
+            raise ValueError("sar_values required for exit_mode='sar_trailing'")
+        sar_values = np.ascontiguousarray(sar_values, dtype=np.float64)
+        if len(sar_values) != n_bars:
+            raise ValueError("sar_values must have same length as price arrays")
+        if open_prices is not None:
+            open_arr = np.ascontiguousarray(open_prices, dtype=np.float64)
+            if len(open_arr) != n_bars:
+                raise ValueError("open_prices must have same length as price arrays")
+            use_open_entry = True
+        else:
+            open_arr = close          # dummy — unused when use_open_entry=False
+            use_open_entry = False
+        result_tuple = _sim_sar_trailing_inner(
+            high, low, close, open_arr,
+            signal_bars, directions, sl_distances, tp_distances,
+            max_hold,
+            sar_values,
+            use_open_entry,
         )
     elif exit_mode == "custom":
         if exit_signals is None:
@@ -596,7 +871,7 @@ def simulate_trades(
             exit_signals,
         )
     else:
-        raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', or 'custom'.")
+        raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', 'sar_trailing', or 'custom'.")
 
     # --- Pack into structured array ---
     pnl_r, hold_bars, exit_type_arr, mfe_r, mae_r, entry_bar, exit_bar_arr = result_tuple

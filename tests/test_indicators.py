@@ -6,6 +6,7 @@ import pytest
 
 from backtest_engine.indicators import (
     sma, true_range, atr, bollinger_bands, rci, expanding_quantile, map_higher_tf,
+    parabolic_sar,
 )
 
 
@@ -132,6 +133,145 @@ class TestRCI:
         assert np.isnan(result[0])
         assert np.isnan(result[3])
         assert not np.isnan(result[4])
+
+
+class TestParabolicSAR:
+    def test_uptrend_sar_below_price(self):
+        """In a monotonic uptrend, SAR should stay below price."""
+        n = 50
+        close = np.arange(100.0, 100.0 + n, dtype=np.float64)
+        high = close + 0.5
+        low = close - 0.5
+        sar, trend, sar_stop = parabolic_sar(high, low)
+        # After initial bars, SAR should be below low in uptrend
+        for i in range(5, n):
+            assert sar[i] < low[i], f"SAR {sar[i]} >= low {low[i]} at bar {i}"
+            assert trend[i] == 1, f"trend should be 1 at bar {i}"
+
+    def test_downtrend_sar_above_price(self):
+        """In a monotonic downtrend (after initial uptrend start), SAR should flip."""
+        n = 50
+        # Start up then go down sharply
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        close[1] = 101.0
+        close[2] = 102.0
+        for i in range(3, n):
+            close[i] = 102.0 - (i - 2) * 2.0
+        high = close + 0.3
+        low = close - 0.3
+        sar, trend, sar_stop = parabolic_sar(high, low)
+        # Should eventually be downtrend with SAR above price
+        assert trend[-1] == -1
+        assert sar[-1] > high[-1]
+
+    def test_reversal_flips_trend(self):
+        """Trend should flip on reversal and SAR should jump to extreme point."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        # Uptrend then sharp reversal
+        for i in range(15):
+            close[i] = 100.0 + i * 1.0
+        for i in range(15, n):
+            close[i] = 114.0 - (i - 14) * 2.0
+        high = close + 0.5
+        low = close - 0.5
+        sar, trend, sar_stop = parabolic_sar(high, low)
+        # Find flip point
+        flip_found = False
+        for i in range(1, n):
+            if trend[i - 1] == 1 and trend[i] == -1:
+                flip_found = True
+                break
+        assert flip_found, "Expected a trend flip from up to down"
+
+    def test_sar_stop_pre_reversal(self):
+        """sar_stop should contain pre-reversal SAR, not the EP jump."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        for i in range(15):
+            close[i] = 100.0 + i * 1.0
+        for i in range(15, n):
+            close[i] = 114.0 - (i - 14) * 2.0
+        high = close + 0.5
+        low = close - 0.5
+        sar, trend, sar_stop = parabolic_sar(high, low)
+
+        # At reversal bar: sar jumps to EP, sar_stop stays at pre-reversal level
+        for i in range(1, n):
+            if trend[i - 1] == 1 and trend[i] == -1:
+                # Reversal from up to down
+                # sar[i] = EP (highest high), sar_stop[i] = computed SAR (pre-reversal)
+                assert sar_stop[i] < sar[i], \
+                    f"At reversal bar {i}: sar_stop={sar_stop[i]} should be < sar={sar[i]}"
+                # sar_stop is the level where the stop triggered (low[i] < sar_stop[i])
+                assert low[i] < sar_stop[i], \
+                    f"low should be below sar_stop at reversal"
+                break
+
+    def test_sar_stop_equals_sar_during_continuation(self):
+        """During trend continuation, sar_stop should equal sar."""
+        n = 50
+        close = np.arange(100.0, 100.0 + n, dtype=np.float64)
+        high = close + 0.5
+        low = close - 0.5
+        sar, trend, sar_stop = parabolic_sar(high, low)
+        # In pure uptrend, sar and sar_stop should be identical
+        np.testing.assert_allclose(sar, sar_stop)
+
+    def test_matches_pure_python(self):
+        """Numba SAR should produce same results as pure Python reference."""
+        np.random.seed(42)
+        n = 200
+        close = np.random.randn(n).cumsum() + 100
+        high = close + np.abs(np.random.randn(n)) * 0.5
+        low = close - np.abs(np.random.randn(n)) * 0.5
+
+        # Pure Python reference (inline)
+        ref_sar = np.empty(n, dtype=np.float64)
+        ref_trend = np.empty(n, dtype=np.int8)
+        ref_sar[0] = low[0]
+        ref_trend[0] = 1
+        ep = high[0]
+        af = 0.02
+        for i in range(1, n):
+            prev = ref_sar[i - 1]
+            if ref_trend[i - 1] == 1:
+                new_sar = prev + af * (ep - prev)
+                new_sar = min(new_sar, low[i - 1])
+                if i >= 2:
+                    new_sar = min(new_sar, low[i - 2])
+                if low[i] < new_sar:
+                    ref_trend[i] = -1
+                    ref_sar[i] = ep
+                    ep = low[i]
+                    af = 0.02
+                else:
+                    ref_trend[i] = 1
+                    ref_sar[i] = new_sar
+                    if high[i] > ep:
+                        ep = high[i]
+                        af = min(af + 0.02, 0.20)
+            else:
+                new_sar = prev + af * (ep - prev)
+                new_sar = max(new_sar, high[i - 1])
+                if i >= 2:
+                    new_sar = max(new_sar, high[i - 2])
+                if high[i] > new_sar:
+                    ref_trend[i] = 1
+                    ref_sar[i] = ep
+                    ep = high[i]
+                    af = 0.02
+                else:
+                    ref_trend[i] = -1
+                    ref_sar[i] = new_sar
+                    if low[i] < ep:
+                        ep = low[i]
+                        af = min(af + 0.02, 0.20)
+
+        sar, trend, sar_stop = parabolic_sar(high, low)
+        np.testing.assert_allclose(sar, ref_sar, atol=1e-10)
+        np.testing.assert_array_equal(trend, ref_trend)
 
 
 class TestExpandingQuantile:

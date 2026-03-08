@@ -9,6 +9,8 @@ from backtest_engine._types import (
     TRADE_RESULT_DTYPE,
 )
 from backtest_engine.core import simulate_trades
+from backtest_engine.indicators import parabolic_sar
+from backtest_engine.costs import BrokerCost
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -325,3 +327,458 @@ class TestOutputFormat:
         assert 0 <= r["entry_bar"] < len(close)
         assert 0 <= r["exit_bar"] < len(close)
         assert r["exit_bar"] >= r["entry_bar"]
+
+
+# ── SAR Trailing Mode Tests ────────────────────────────────────────────────
+
+class TestSARTrailingMode:
+    def test_sar_trailing_long_exit(self):
+        """LONG should exit via SAR trail when trend flips."""
+        n = 40
+        close = np.empty(n, dtype=np.float64)
+        # Uptrend then reversal
+        for i in range(20):
+            close[i] = 100.0 + i * 1.5
+        for i in range(20, n):
+            close[i] = close[19] - (i - 19) * 2.0
+        high = close + 0.5
+        low = close - 0.5
+
+        sar, trend, sar_stop = parabolic_sar(high, low)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),  # wide hard SL
+            tp_distances=np.array([1e6], dtype=np.float64),   # no TP
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_TRAIL
+        assert r["pnl_r"] > 0.0  # should have locked profit
+
+    def test_sar_trailing_exit_price_not_ep(self):
+        """Exit price should be pre-reversal SAR, NOT the extreme point."""
+        n = 40
+        close = np.empty(n, dtype=np.float64)
+        for i in range(20):
+            close[i] = 100.0 + i * 1.5  # up to 128.5
+        for i in range(20, n):
+            close[i] = close[19] - (i - 19) * 2.0
+        high = close + 0.5
+        low = close - 0.5
+
+        sar, trend, sar_stop = parabolic_sar(high, low)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # Exit price = entry + pnl_r * sl_dist
+        entry_price = close[0]
+        exit_price = entry_price + r["pnl_r"] * 50.0
+        # Exit should NOT be at the highest point (128.5+0.5=129)
+        assert exit_price < high.max(), f"Exit {exit_price} should be < max high {high.max()}"
+
+    def test_sar_trailing_short_exit(self):
+        """SHORT should exit via SAR trail when trend flips up."""
+        n = 40
+        close = np.empty(n, dtype=np.float64)
+        # Downtrend then reversal
+        close[0] = 100.0
+        close[1] = 101.0
+        close[2] = 102.0
+        for i in range(3, 20):
+            close[i] = 102.0 - (i - 2) * 2.0
+        for i in range(20, n):
+            close[i] = close[19] + (i - 19) * 2.0
+        high = close + 0.5
+        low = close - 0.5
+
+        sar, trend, sar_stop = parabolic_sar(high, low)
+
+        # Enter short once trend is confirmed down
+        entry_bar = 8  # should be in downtrend by now
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([entry_bar], dtype=np.int32),
+            directions=np.array([SHORT], dtype=np.int8),
+            sl_distances=np.array([80.0], dtype=np.float64),  # wide hard SL
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # Should exit via trail or time
+        assert r["exit_type"] in (EXIT_TRAIL, EXIT_TIME)
+
+    def test_sar_trailing_hard_sl_priority(self):
+        """Hard SL should fire when it's tighter than SAR."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        # Uptrend for 15 bars so SAR drifts well below price
+        for i in range(15):
+            close[i] = 100.0 + i * 2.0
+        # Then a sudden drop from bar 15
+        for i in range(15, n):
+            close[i] = close[14] - (i - 14) * 5.0
+        high = close + 0.3
+        low = close - 0.3
+
+        sar, trend, sar_stop = parabolic_sar(high, low)
+
+        # Enter LONG at bar 14 (peak) with tight hard SL=3.0
+        entry_bar = 14
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([entry_bar], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([3.0], dtype=np.float64),  # tight hard SL
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # Hard SL (entry-3) is above the lagging SAR → hard SL fires first
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+    def test_sar_trailing_requires_sar_values(self, simple_uptrend):
+        """Should raise ValueError if sar_values not provided."""
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match="sar_values required"):
+            _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="sar_trailing")
+
+    def test_sar_trailing_timeout(self, flat_market):
+        """In flat market with wide SL, trade should timeout."""
+        high, low, close = flat_market
+        sar, _, sar_stop = parabolic_sar(high, low)
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=10,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        assert r["exit_type"] in (EXIT_TIME, EXIT_TRAIL, EXIT_SL)
+        assert r["hold_bars"] <= 10
+
+    def test_counter_trend_long_no_phantom_profit(self):
+        """B-plan: counter-trend LONG should NOT get phantom profit from SAR above."""
+        # Downtrend: SAR above price throughout
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        for i in range(1, n):
+            close[i] = 100.0 - i * 0.5  # gentle decline
+        high = close + 0.3
+        low = close - 0.3
+
+        # Manually create SAR that stays ABOVE price (simulating downtrend SAR)
+        sar_stop = close + 3.0  # SAR is always 3.0 above close
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # Old buggy kernel would exit at SAR (above entry) = phantom profit.
+        # B-plan: SAR > close[b-1] → TP target → high must reach SAR.
+        # high = close + 0.3, SAR = close + 3.0 → high never reaches SAR.
+        # Price declines → hits hard SL at 95.0.
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+    def test_counter_trend_long_sar_reached(self):
+        """B-plan: LONG exits at SAR when price actually rises to SAR level."""
+        n = 20
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        # Flat, then rise
+        for i in range(1, 10):
+            close[i] = 100.0
+        for i in range(10, n):
+            close[i] = 100.0 + (i - 9) * 2.0  # rise from 102 to 120+
+        high = close + 0.5
+        low = close - 0.5
+
+        # SAR starts above at 105, stays constant
+        sar_stop = np.full(n, 105.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # Price rises → high reaches 105 at bar 12 (close=104, high=104.5? No...)
+        # Bar 12: close = 100 + (12-9)*2 = 106, high = 106.5 → high >= 105 ✓
+        # But close[11] = 104, so SAR 105 > 104 → else branch → check high >= 105
+        # high[12] = 106.5 >= 105 → EXIT_TRAIL at SAR=105
+        assert r["exit_type"] == EXIT_TRAIL
+        assert r["pnl_r"] == pytest.approx((105.0 - 100.0) / 5.0)  # = 1.0R
+
+    def test_counter_trend_short_sl_hit(self):
+        """B-plan: counter-trend SHORT hits hard SL when price rises."""
+        n = 20
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        for i in range(1, n):
+            close[i] = 100.0 + i * 1.0  # uptrend
+        high = close + 0.3
+        low = close - 0.3
+
+        # SAR below price (uptrend SAR), simulating counter-trend SHORT
+        sar_stop = close - 3.0  # SAR always 3.0 below close
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([SHORT], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+        )
+        r = result[0]
+        # SAR < close[b-1] → else branch → hard SL first
+        # hard_sl = 100 + 5 = 105. high reaches 105 at bar ~5.
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+    def test_open_entry_timing(self):
+        """open_prices should shift entry to next-bar open."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            close[i] = 100.0 + i * 1.0
+        high = close + 0.5
+        low = close - 0.5
+        open_prices = close - 0.2  # opens slightly below close
+
+        sar_stop = np.full(n, 50.0, dtype=np.float64)  # SAR far below → trailing SL
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([5], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        # Entry should be at open_prices[6] = 105.8, not close[5] = 105.0
+        assert r["entry_bar"] == 6
+        # Verify entry price via PnL back-calculation
+        expected_entry = open_prices[6]  # 105.8
+        actual_exit_price = expected_entry + r["pnl_r"] * 50.0
+        assert actual_exit_price > 0  # sanity
+
+    def test_open_entry_last_bar_no_fill(self):
+        """Signal on last bar with open_prices should be NO_FILL."""
+        n = 10
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 100.0, dtype=np.float64)
+        sar_stop = np.full(n, 95.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([9], dtype=np.int32),  # last bar
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_NO_FILL
+        assert r["pnl_r"] == 0.0
+
+    def test_rr_open_entry_timing(self):
+        """RR mode should use next-bar open when open_prices are provided."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            close[i] = 100.0 + i * 1.0
+        high = close + 0.5
+        low = close - 0.5
+        open_prices = close - 0.2
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([5], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="rr",
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 6
+        expected_entry = open_prices[6]
+        actual_exit_price = expected_entry + r["pnl_r"] * 50.0
+        assert actual_exit_price > 0
+
+    def test_rr_open_entry_last_bar_no_fill(self):
+        """RR mode should return NO_FILL when no next-bar open exists."""
+        n = 10
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 100.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([9], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=n,
+            exit_mode="rr",
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_NO_FILL
+        assert r["pnl_r"] == 0.0
+
+    def test_rr_open_entry_checks_entry_bar_sl(self):
+        """Next-bar-open entries must check SL on the entry bar itself."""
+        close = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        open_prices = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        high = np.array([100.5, 100.5, 100.5], dtype=np.float64)
+        low = np.array([99.5, 94.0, 99.5], dtype=np.float64)  # bar 1 hits SL=95
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([50.0], dtype=np.float64),
+            max_hold=5,
+            exit_mode="rr",
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 1
+        assert r["exit_bar"] == 1
+        assert r["hold_bars"] == 0
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+    def test_rr_open_entry_checks_entry_bar_tp(self):
+        """Next-bar-open entries must check TP on the entry bar itself."""
+        close = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        open_prices = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        high = np.array([100.5, 111.0, 100.5], dtype=np.float64)  # bar 1 hits TP=110
+        low = np.array([99.5, 99.0, 99.5], dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=5,
+            exit_mode="rr",
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 1
+        assert r["exit_bar"] == 1
+        assert r["hold_bars"] == 0
+        assert r["exit_type"] == EXIT_TP
+        assert r["pnl_r"] == pytest.approx(2.0)
+
+    def test_sar_open_entry_checks_entry_bar_sl(self):
+        """SAR mode should also check SL on the next-bar-open entry bar."""
+        close = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        open_prices = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        high = np.array([100.5, 100.5, 100.5], dtype=np.float64)
+        low = np.array([99.5, 94.0, 99.5], dtype=np.float64)
+        sar_stop = np.full(3, 50.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=5,
+            exit_mode="sar_trailing",
+            sar_values=sar_stop,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 1
+        assert r["exit_bar"] == 1
+        assert r["hold_bars"] == 0
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+
+# ── Cost Model Tests ───────────────────────────────────────────────────────
+
+class TestFundoraCost:
+    def test_xauusd_present(self):
+        """XAUUSD should be in fundora cost model."""
+        cost = BrokerCost.fundora()
+        assert "XAUUSD" in cost.spreads
+
+    def test_xauusd_cost_roundtrip(self):
+        """XAUUSD total cost should be spread only (no commission in fundora)."""
+        cost = BrokerCost.fundora()
+        total = cost.cost_price("XAUUSD")
+        # Fundora: spread=0.40, commission=0 → total=0.40
+        assert total == pytest.approx(0.40)
+
+    def test_eurusd_cost_roundtrip(self):
+        """EURUSD total cost should be spread only."""
+        cost = BrokerCost.fundora()
+        total = cost.cost_price("EURUSD")
+        assert total == pytest.approx(0.00010)
+
+    def test_xauusd_pip_size(self):
+        """XAUUSD pip_size should be 0.01."""
+        cost = BrokerCost.fundora()
+        assert cost.pip_sizes["XAUUSD"] == pytest.approx(0.01)
+
+    def test_xauusd_pip_value(self):
+        """XAUUSD pip_value should be 1.0."""
+        cost = BrokerCost.fundora()
+        assert cost.pip_values["XAUUSD"] == pytest.approx(1.0)
