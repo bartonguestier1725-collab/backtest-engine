@@ -3,10 +3,11 @@
 Kill bad strategies in 5 minutes, not 7 hours.
 
 Gate 0: Data validation (1 min)    — Do we have enough data? Correct costs?
-Gate 1: Quick feasibility (5 min)  — Run 10 combos on full data. PF < 1.05 → dead.
-Gate 2: Coarse screen (20 min)     — Run 100 combos. PF < 1.15 → dead.
-Gate 3: Full grid + WFA (1 hour)   — 1000+ combos. WFA on top 10. PBO > 0.40 → dead.
-Gate 4: MC + Fundora check (30 min) — Monte Carlo + prop firm rules.
+Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. PF < 1.05 → dead.
+Gate 2: Coarse screen (20 min)     — Run ~100 combos. PF < 1.10, RF < 1.5 → dead.
+
+Default thresholds are tuned for FX. Override them via class variables
+(e.g. ``gk.GATE1_MIN_PF = 1.10``) for other asset classes.
 
 Usage:
     from backtest_engine import GateKeeper
@@ -29,23 +30,20 @@ Usage:
     # Gate 2: expanded grid
     gk.gate2_screen(run_func, screen_params)
 
-    # Gate 3: full grid + WFA
-    gk.gate3_wfa(run_func, full_params, data_array)
-
-    # Gate 4: Monte Carlo
-    gk.gate4_mc(best_trades, balance=50000)
+    gk.summary()
 """
 
 from __future__ import annotations
 
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import numpy as np
 
-from backtest_engine.bug_guard import run_all_checks, GuardReport
+from backtest_engine.bug_guard import run_all_checks, GuardReport, _fundora_expected_costs
 
 
 @dataclass
@@ -69,7 +67,8 @@ class GateKeeper:
     resolution_minutes : Execution simulation resolution.
     spreads_used : Cost dict for BugGuard validation.
     source_path : Script path for source code checks.
-    broker : Broker name for cost registry.
+    expected_costs : {pair: cost_in_price_units} for cost validation.
+                     Use BrokerCost.cost_prices() to generate this.
     """
 
     # Gate thresholds
@@ -90,15 +89,30 @@ class GateKeeper:
         resolution_minutes: int = 1,
         spreads_used: Optional[dict[str, float]] = None,
         source_path: Optional[str | Path] = None,
-        broker: str = "fundora",
+        expected_costs: Optional[dict[str, float]] = None,
+        **kwargs,
     ):
+        # Backward compat: accept deprecated broker kwarg
+        if "broker" in kwargs:
+            warnings.warn(
+                "broker parameter is deprecated. "
+                "Use expected_costs=BrokerCost.cost_prices() instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            broker = kwargs.pop("broker")
+            if expected_costs is None and broker == "fundora":
+                expected_costs = _fundora_expected_costs()
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
         self.strategy_name = strategy_name
         self.n_bars = n_bars
         self.bar_minutes = bar_minutes
         self.resolution_minutes = resolution_minutes
         self.spreads_used = spreads_used
         self.source_path = source_path
-        self.broker = broker
+        self.expected_costs = expected_costs
         self.gates: list[GateResult] = []
 
     def _header(self, gate: str, desc: str):
@@ -126,7 +140,7 @@ class GateKeeper:
         report = run_all_checks(
             source_path=self.source_path,
             spreads_used=self.spreads_used,
-            broker=self.broker,
+            expected_costs=self.expected_costs,
             resolution_minutes=self.resolution_minutes,
             n_bars=self.n_bars,
             bar_minutes=self.bar_minutes,
