@@ -1,8 +1,20 @@
 [project]
 name = "backtest-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "Numba-accelerated backtesting engine for trading strategies"
 requires-python = ">=3.12"
+license = "GPL-3.0-only"
+readme = "README.md"
+authors = [
+    {name = "backtest-engine contributors"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
     "numpy>=2.2,<2.4",
     "numba>=0.61",
@@ -14,6 +26,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/bartonguestier1725-collab/backtest-engine"
 
 [build-system]
 requires = ["hatchling"]
