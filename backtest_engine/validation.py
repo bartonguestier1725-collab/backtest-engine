@@ -106,14 +106,27 @@ class WalkForward:
                 "oos_metric": oos_metric,
             })
 
+        is_metrics = np.array([r["is_metric"] for r in results])
         oos_metrics = np.array([r["oos_metric"] for r in results])
+
+        is_mean = float(np.mean(is_metrics))
+        oos_mean = float(np.mean(oos_metrics))
 
         return {
             "splits": results,
+            "is_metrics": is_metrics,
+            "is_mean": is_mean,
+            "is_std": float(np.std(is_metrics)),
             "oos_metrics": oos_metrics,
-            "oos_mean": float(np.mean(oos_metrics)),
+            "oos_mean": oos_mean,
             "oos_std": float(np.std(oos_metrics)),
             "oos_positive_frac": float(np.mean(oos_metrics > 0)),
+            # Raw IS/OOS ratio: simple mean(OOS)/mean(IS). Note: this metric is
+            # biased by split length asymmetry (anchored windows have growing IS).
+            # Prefer oos_positive_frac as the primary robustness metric.
+            "is_oos_ratio_raw": oos_mean / is_mean if is_mean != 0 else 0.0,
+            # Backward compat alias
+            "is_oos_ratio": oos_mean / is_mean if is_mean != 0 else 0.0,
         }
 
 

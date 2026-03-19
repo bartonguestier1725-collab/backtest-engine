@@ -18,8 +18,8 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 
 ### Opinionated modules (FX defaults, fully customizable)
 
-- **BrokerCost** — measured spread + commission model. Ships with FX presets (28 pairs + XAUUSD), but accepts any instrument via constructor
-- **BugGuard** — 11 automated checks (BG-01–BG-11) that catch look-ahead bias, cost underestimation, overfitting, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market
+- **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
+- **BugGuard** — 14 automated checks (BG-01–BG-13) that catch look-ahead bias, cost underestimation, fixed-cost misuse, spread filter violations, overfitting, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market
 - **GateKeeper** — fast-kill pipeline (Gate 0–2) that eliminates hopeless parameter combos early. Thresholds (PF, RF, trades) are class variables — override them for your asset class
 
 ## Install
@@ -37,10 +37,10 @@ uv pip install -e '.[dev]'
 
 ```python
 import numpy as np
-from backtest_engine import simulate_trades, LONG, MonteCarloDD, atr
+from backtest_engine import simulate_trades, BrokerCost, LONG, MonteCarloDD, atr
 
 # OHLC data (numpy arrays)
-high, low, close = ...
+open_, high, low, close = ...
 
 # ATR-based SL/TP
 atr_vals = atr(high, low, close, 14)
@@ -51,17 +51,26 @@ directions = np.array([LONG, LONG, LONG], dtype=np.int8)
 sl_distances = atr_vals[signal_bars] * 1.5
 tp_distances = atr_vals[signal_bars] * 3.0
 
-# Run simulation
+# Per-trade cost (spread + commission, scaled to each trade's SL)
+cost = BrokerCost.tradeview_ilc()
+instruments = ["EURUSD"] * len(signal_bars)
+entry_costs = cost.per_trade_cost(instruments, sl_distances)
+
+# Run simulation (Grade A: both open_prices and entry_costs provided)
 results = simulate_trades(
     high, low, close,
     signal_bars, directions, sl_distances, tp_distances,
     max_hold=100,
-    be_trigger_pct=0.5,  # Move SL to breakeven at 50% of TP
+    be_trigger_pct=0.5,
+    open_prices=open_,
+    entry_costs=entry_costs,
 )
 
-# Results
+# Results (pnl_r is already net of costs)
+print(f"Quality: {results.quality.grade}")  # "A"
 print(f"Win rate: {np.mean(results['pnl_r'] > 0) * 100:.1f}%")
 print(f"Avg PnL: {np.mean(results['pnl_r']):.3f}R")
+print(f"Avg cost: {np.mean(results['cost_r']):.4f}R")
 
 # Monte Carlo DD analysis
 mc = MonteCarloDD(results['pnl_r'], risk_pct=0.01)
@@ -83,6 +92,43 @@ print(f"95th DD: {mc.dd_percentile(95) * 100:.1f}%")
 | `trail_activation_r` | R-multiple required to activate trailing stop |
 | `trail_distance_r` | Trailing stop distance in R-multiples |
 | `open_prices` | Enter at next-bar open instead of signal-bar close (supported in all modes) |
+| `entry_costs` | Per-trade cost array in R-units (e.g. from `BrokerCost.per_trade_cost()`). Subtracted from `pnl_r` post-simulation. `NO_FILL` trades automatically get zero cost |
+
+## Pre-flight quality check
+
+`simulate_trades()` inspects its inputs before running and assigns a quality grade:
+
+| Grade | Condition | Meaning |
+|-------|-----------|---------|
+| A | `entry_costs` AND `open_prices` both provided | All inputs provided |
+| B | One of the two provided | One input missing |
+| C | Neither provided | No costs + close entry — over-optimistic |
+
+Grade indicates whether inputs were provided, not whether they are correct. Use BugGuard (BG-02, BG-12) to validate cost accuracy.
+
+Grade B/C emit a `BacktestQualityWarning` with details on what's missing. The simulation still runs — nothing is blocked.
+
+```python
+# Grade C — warns you
+results = simulate_trades(high, low, close, ...)
+# BacktestQualityWarning: Backtest Quality: C
+#   entry_costs:  NOT PROVIDED — costs will be 0 (use BrokerCost.per_trade_cost())
+#   open_prices:  NOT PROVIDED — entry at signal-bar close (optimistic bias)
+
+# Grade A — no warning
+results = simulate_trades(..., open_prices=open_arr, entry_costs=cost_arr)
+
+# Access quality info
+print(results.quality.grade)  # "A"
+
+# Suppress warnings
+import warnings
+from backtest_engine import BacktestQualityWarning
+warnings.filterwarnings("ignore", category=BacktestQualityWarning)
+
+# Or disable per call
+results = simulate_trades(..., preflight=False)
+```
 
 ## Broker cost models
 
@@ -99,13 +145,15 @@ cost = BrokerCost(
     pip_sizes={"EURUSD": 0.0001, "USDJPY": 0.01, "BTCUSD": 1.0},
 )
 
-# FX presets (ships with 28 pairs + XAUUSD, measured spreads)
+# FX presets (ships with 29 pairs (28 FX + XAUUSD), measured spreads)
 cost = BrokerCost.tradeview_ilc()   # ECN (tight spread + $5 RT commission)
 cost = BrokerCost.fundora()          # Prop firm (wider spread, no commission)
 
-# Cost per trade in R-units
-cost_r = cost.as_r("EURUSD", risk_price=0.00050)
-pnl_after_costs = results['pnl_r'] - cost_r
+# Per-trade cost — pass to simulate_trades() for accurate cost modeling
+instruments = ["EURUSD"] * len(sl_distances)
+cost_array = cost.per_trade_cost(instruments, sl_distances)
+results = simulate_trades(..., entry_costs=cost_array)
+# results['pnl_r'] already has costs subtracted; results['cost_r'] shows each trade's cost
 
 # Get all costs as a dict (useful for BugGuard)
 expected = cost.cost_prices()  # {"EURUSD": 0.00007, "USDJPY": 0.014, ...}
@@ -113,7 +161,7 @@ expected = cost.cost_prices()  # {"EURUSD": 0.00007, "USDJPY": 0.014, ...}
 
 ## BugGuard
 
-Automatically checks for 11 known backtesting bugs before you trust any result.
+Automatically checks for 14 known backtesting bugs before you trust any result.
 
 The checks themselves are instrument-agnostic (look-ahead bias, bfill leak, same-bar reentry, etc.). The only FX-specific part is data period estimation — pass `start_ts`/`end_ts` to use calendar dates instead.
 
@@ -133,16 +181,21 @@ report = bug_guard(
 )
 # BG-01: Look-ahead bias      BG-02: Cost underestimation  BG-04: bfill data leak
 # BG-05: Coarse-bar SL/TP     BG-06: Short-period overfit  BG-07: Full-period quantile
-# BG-08: Same-bar re-entry     BG-09: Close-price entry     ... and more
+# BG-08: Same-bar re-entry     BG-09: Close-price entry     BG-09b: Missing open_prices
+# BG-12: Fixed-cost misuse    BG-13: Spread filter gap     ... and more
 ```
 
 Individual checks can also be called standalone:
 
 ```python
-from backtest_engine import check_look_ahead, check_cost_registry
+from backtest_engine import check_look_ahead, check_cost_registry, check_spread_filter
 
 result = check_look_ahead(signal_bars, entry_bars)
 print(f"{result.check_id}: {result.message}")
+
+# Check if backtest signals respect a max spread constraint
+spread_result = check_spread_filter(spreads_at_entry, max_spread=0.00020)
+print(f"{spread_result.check_id}: {spread_result.message}")
 ```
 
 ## GateKeeper
@@ -195,8 +248,8 @@ print(f"Kelly: {mc.kelly_fraction()*100:.1f}%")
 print(f"Optimal risk: {mc.optimal_risk_pct(max_dd=0.15)*100:.2f}%")
 
 # Prop firm drawdown check (any firm, any limits)
-result = mc.prop_firm_check(daily_dd_limit=0.04, total_dd_limit=0.08, confidence=95.0)
-print(f"Pass: {result['pass']}")
+result = mc.prop_firm_check(max_dd_limit=0.04, total_dd_limit=0.08, confidence=95.0)
+print(f"Pass: {result['pass']}, Max DD OK: {result['max_dd_ok']}")
 ```
 
 ## Walk-Forward & CSCV
@@ -241,7 +294,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 | Module | Default | How to override |
 |--------|---------|-----------------|
 | `BugGuard` | Data period estimation uses FX hours (22 days/mo, 17h/day) | Pass `start_ts`/`end_ts` to `check_data_period()` |
-| `BugGuard` | Fundora cost registry (28 FX pairs + XAUUSD) | Pass your own `expected_costs` dict |
+| `BugGuard` | Fundora cost registry (29 pairs: 28 FX + XAUUSD) | Pass your own `expected_costs` dict |
 | `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
 | `BrokerCost` | `tradeview_ilc()`, `fundora()` presets | Use the constructor directly with your own spreads |
 
@@ -251,7 +304,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 python -m pytest tests/ -v
 ```
 
-123 tests, all passing.
+170+ tests, all passing.
 
 ## License
 

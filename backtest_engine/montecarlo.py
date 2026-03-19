@@ -151,24 +151,64 @@ class MonteCarloDD:
 
         return best
 
+    def prop_firm_check(
+        self,
+        max_dd_limit: float = 0.04,
+        total_dd_limit: float = 0.08,
+        confidence: float = 95.0,
+        # Backward compat
+        daily_dd_limit: float | None = None,
+    ) -> dict:
+        """Check if strategy meets prop firm DD constraints.
+
+        Parameters
+        ----------
+        max_dd_limit : Max drawdown at confidence percentile (e.g. 0.04 = 4%).
+                       This checks the Monte Carlo max DD distribution, NOT daily DD.
+        total_dd_limit : Max drawdown at 99th percentile (e.g. 0.08 = 8%).
+        confidence : Percentile for max_dd_limit check (e.g. 95.0).
+        daily_dd_limit : Deprecated alias for max_dd_limit.
+
+        Returns dict with pass/fail and DD statistics.
+        """
+        # Backward compat: daily_dd_limit → max_dd_limit
+        if daily_dd_limit is not None:
+            import warnings
+            warnings.warn(
+                "daily_dd_limit is renamed to max_dd_limit. "
+                "The check uses Monte Carlo max DD, not daily DD.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            max_dd_limit = daily_dd_limit
+
+        dd_conf = self.dd_percentile(confidence)
+        dd99 = self.dd_percentile(99.0)
+
+        return {
+            "risk_pct": self.risk_pct,
+            "dd_confidence": dd_conf,
+            "dd_99": dd99,
+            "max_dd_ok": dd_conf < max_dd_limit,
+            "total_dd_ok": dd99 < total_dd_limit,
+            "pass": dd_conf < max_dd_limit and dd99 < total_dd_limit,
+            # Backward compat alias
+            "daily_dd_ok": dd_conf < max_dd_limit,
+        }
+
     def fundora_check(
         self,
         daily_dd_limit: float = 0.04,
         total_dd_limit: float = 0.08,
         confidence: float = 95.0,
     ) -> dict:
-        """Check if strategy meets Fundora prop firm DD constraints.
-
-        Returns dict with pass/fail and DD statistics.
-        """
-        dd95 = self.dd_percentile(confidence)
-        dd99 = self.dd_percentile(99.0)
-
-        return {
-            "risk_pct": self.risk_pct,
-            "dd_95": dd95,
-            "dd_99": dd99,
-            "daily_dd_ok": dd95 < daily_dd_limit,
-            "total_dd_ok": dd99 < total_dd_limit,
-            "pass": dd95 < daily_dd_limit and dd99 < total_dd_limit,
-        }
+        """Deprecated: use prop_firm_check() instead."""
+        import warnings
+        warnings.warn(
+            "fundora_check() is deprecated, use prop_firm_check() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = self.prop_firm_check(max_dd_limit=daily_dd_limit, total_dd_limit=total_dd_limit, confidence=confidence)
+        result["dd_95"] = result["dd_confidence"]
+        return result

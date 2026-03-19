@@ -72,6 +72,27 @@ class TestWalkForward:
         result = wf.run(param_grid, _dummy_evaluate)
         assert result["oos_positive_frac"] == 1.0  # All positive with alpha=1.0
 
+    def test_is_metrics_returned(self):
+        """run() should return IS metrics alongside OOS metrics."""
+        param_grid = [{"alpha": 0.5}, {"alpha": 1.0}]
+        wf = WalkForward(n_bars=500, is_ratio=0.7, n_splits=3)
+        result = wf.run(param_grid, _dummy_evaluate)
+        assert "is_metrics" in result
+        assert "is_mean" in result
+        assert "is_std" in result
+        assert len(result["is_metrics"]) == 3
+        assert result["is_mean"] > 0
+
+    def test_is_oos_ratio(self):
+        """Deterministic strategy should have is_oos_ratio close to 1."""
+        param_grid = [{"alpha": 1.0}]
+        wf = WalkForward(n_bars=500, is_ratio=0.7, n_splits=3)
+        result = wf.run(param_grid, _dummy_evaluate)
+        assert "is_oos_ratio" in result
+        # For a deterministic linear function, OOS should be proportional to IS
+        # Tighter bounds: ratio should be close to 1.0 for a stable strategy
+        assert 0.1 < result["is_oos_ratio"] < 3.0
+
 
 # ── CSCV Tests ───────────────────────────────────────────────────────────────
 

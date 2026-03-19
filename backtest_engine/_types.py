@@ -24,4 +24,5 @@ TRADE_RESULT_DTYPE = np.dtype([
     ("mae_r", np.float64),
     ("entry_bar", np.int32),
     ("exit_bar", np.int32),
+    ("cost_r", np.float64),
 ])

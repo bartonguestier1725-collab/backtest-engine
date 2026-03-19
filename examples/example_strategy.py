@@ -61,7 +61,7 @@ def main():
     print("=" * 60)
 
     # 1. Generate data
-    high, low, close, _ = generate_synthetic_data(5000)
+    high, low, close, open_price = generate_synthetic_data(5000)
     print(f"\nData: {len(close)} bars, price range {close.min():.5f} — {close.max():.5f}")
 
     # 2. Compute ATR for dynamic SL/TP
@@ -79,22 +79,33 @@ def main():
     sl_distances = atr_vals[signal_bars] * 1.5  # 1.5 ATR SL
     tp_distances = atr_vals[signal_bars] * 3.0  # 3.0 ATR TP (2:1 RR)
 
-    # 5. Simulate trades
+    # 5. Per-trade cost (ATR-varying SL → cost varies per trade)
+    cost_model = BrokerCost.tradeview_ilc()
+    instruments = ["EURUSD"] * len(signal_bars)
+    cost_r_array = cost_model.per_trade_cost(instruments, sl_distances)
+
+    # 6. Simulate trades (Grade A: open_prices + entry_costs)
     results = simulate_trades(
         high, low, close,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=100,
         exit_mode="rr",
         be_trigger_pct=0.5,  # Move SL to breakeven at 50% of TP
+        open_prices=open_price,
+        entry_costs=cost_r_array,
     )
 
-    # 6. Analyze results
+    # 7. Quality grade
+    print(f"\nQuality Grade: {results.quality.grade}")
+
+    # 8. Analyze results (pnl_r already includes costs)
     pnl = results["pnl_r"]
-    print(f"\n--- Trade Results ---")
+    print(f"\n--- Trade Results (net of costs) ---")
     print(f"Total trades: {len(pnl)}")
     print(f"Win rate: {np.mean(pnl > 0) * 100:.1f}%")
     print(f"Avg PnL: {np.mean(pnl):.3f}R")
     print(f"Total PnL: {np.sum(pnl):.1f}R")
+    print(f"Avg cost: {np.mean(results['cost_r']):.4f}R")
     print(f"Max MFE: {np.max(results['mfe_r']):.2f}R")
     print(f"Max MAE: {np.min(results['mae_r']):.2f}R")
 
@@ -104,17 +115,8 @@ def main():
         if count > 0:
             print(f"  {name}: {count} ({count/len(pnl)*100:.0f}%)")
 
-    # 7. Cost analysis
-    cost_model = BrokerCost.tradeview_ilc()
-    cost_r = cost_model.as_r("EURUSD", np.mean(sl_distances))
-    pnl_after_costs = pnl - cost_r
-    print(f"\n--- After Costs (Tradeview ILC) ---")
-    print(f"Cost per trade: {cost_r:.4f}R")
-    print(f"Avg PnL after costs: {np.mean(pnl_after_costs):.3f}R")
-    print(f"Total PnL after costs: {np.sum(pnl_after_costs):.1f}R")
-
-    # 8. Monte Carlo analysis
-    mc = MonteCarloDD(pnl_after_costs, n_sims=10000, risk_pct=0.01, seed=42)
+    # 9. Monte Carlo analysis
+    mc = MonteCarloDD(pnl, n_sims=10000, risk_pct=0.01, seed=42)
     mc.run()
     print(f"\n--- Monte Carlo (1% risk, 10K sims) ---")
     print(f"DD 50th pct: {mc.dd_percentile(50)*100:.1f}%")
@@ -123,11 +125,11 @@ def main():
     print(f"Ruin prob (>30% DD): {mc.ruin_probability(0.30)*100:.1f}%")
     print(f"Kelly fraction: {mc.kelly_fraction()*100:.1f}%")
 
-    # 9. Optimal risk sizing
+    # 10. Optimal risk sizing
     optimal = mc.optimal_risk_pct(max_dd=0.15, target_pct=95.0)
     print(f"Optimal risk% (15% DD @ 95th): {optimal*100:.2f}%")
 
-    # 10. Walk-Forward validation
+    # 11. Walk-Forward validation
     def evaluate(params, start, end):
         sig, dirs = find_signals(close[start:end], params["fast"], params["slow"])
         if len(sig) == 0:
@@ -142,6 +144,7 @@ def main():
             high[start:end], low[start:end], close[start:end],
             sig[valid], dirs[valid], sl_d[valid], tp_d[valid],
             max_hold=100,
+            preflight=False,  # suppress per-iteration warnings
         )
         return float(np.mean(r["pnl_r"])) if len(r) > 0 else 0.0
 

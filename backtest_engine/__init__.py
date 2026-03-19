@@ -1,6 +1,6 @@
 """Numba-accelerated backtesting engine for trading strategies."""
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 from backtest_engine._types import (
     LONG, SHORT,
@@ -8,6 +8,8 @@ from backtest_engine._types import (
     TRADE_RESULT_DTYPE,
 )
 from backtest_engine.core import simulate_trades
+from backtest_engine.preflight import BacktestQualityWarning, PreflightReport
+from backtest_engine._results import TradeResults
 from backtest_engine.indicators import (
     sma, true_range, atr, bollinger_bands, rci, expanding_quantile, map_higher_tf,
     parabolic_sar,
@@ -21,7 +23,7 @@ from backtest_engine.bug_guard import (
     check_look_ahead, check_cost_registry, check_bfill_in_source,
     check_resolution, check_data_period, check_same_bar_reentry,
     check_entry_price_type, check_min_trades,
-    FUNDORA_COST_PIPS, cost_pips_to_price,
+    check_open_prices_provided, check_fixed_cost_usage, check_spread_filter,
 )
 from backtest_engine.gatekeeper import GateKeeper
 
@@ -30,6 +32,7 @@ __all__ = [
     "LONG", "SHORT",
     "EXIT_SL", "EXIT_TP", "EXIT_TIME", "EXIT_BE", "EXIT_CUSTOM", "EXIT_TRAIL", "EXIT_NO_FILL",
     "TRADE_RESULT_DTYPE",
+    "BacktestQualityWarning", "PreflightReport", "TradeResults",
     "sma", "true_range", "atr", "bollinger_bands", "rci", "expanding_quantile", "map_higher_tf",
     "parabolic_sar",
     "BrokerCost",
@@ -40,5 +43,5 @@ __all__ = [
     "check_look_ahead", "check_cost_registry", "check_bfill_in_source",
     "check_resolution", "check_data_period", "check_same_bar_reentry",
     "check_entry_price_type", "check_min_trades",
-    "FUNDORA_COST_PIPS", "cost_pips_to_price",
+    "check_open_prices_provided", "check_fixed_cost_usage", "check_spread_filter",
 ]

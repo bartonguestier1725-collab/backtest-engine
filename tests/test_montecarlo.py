@@ -1,5 +1,7 @@
 """Tests for backtest_engine.montecarlo."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -91,13 +93,39 @@ class TestMonteCarloDD:
         opt = mc.optimal_risk_pct(max_dd=0.20, target_pct=95.0)
         assert 0.001 <= opt <= 0.10
 
-    def test_fundora_check(self, profitable_system):
+    def test_prop_firm_check(self, profitable_system):
         mc = MonteCarloDD(profitable_system, n_sims=500, risk_pct=0.005, seed=42)
         mc.run()
-        result = mc.fundora_check()
+        result = mc.prop_firm_check()
         assert "pass" in result
-        assert "dd_95" in result
+        assert "dd_confidence" in result
         assert "dd_99" in result
+        assert isinstance(result["pass"], bool)
+        assert "max_dd_ok" in result
+        assert "daily_dd_ok" in result  # backward compat
+        assert result["max_dd_ok"] == result["daily_dd_ok"]
+
+    def test_prop_firm_check_custom_limits(self, profitable_system):
+        mc = MonteCarloDD(profitable_system, n_sims=500, risk_pct=0.005, seed=42)
+        mc.run()
+        result = mc.prop_firm_check(max_dd_limit=0.05, total_dd_limit=0.10, confidence=90.0)
+        assert "dd_confidence" in result
+        assert isinstance(result["max_dd_ok"], bool)
+        assert isinstance(result["total_dd_ok"], bool)
+        # backward compat: daily_dd_ok should also exist
+        assert isinstance(result["daily_dd_ok"], bool)
+
+    def test_fundora_check_deprecated(self, profitable_system):
+        mc = MonteCarloDD(profitable_system, n_sims=500, risk_pct=0.005, seed=42)
+        mc.run()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = mc.fundora_check()
+            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(dep_warnings) == 1
+        assert "pass" in result
+        assert "dd_95" in result  # backward compat key
+        assert "dd_confidence" in result  # new key also present
         assert isinstance(result["pass"], bool)
 
     def test_lazy_run(self, profitable_system):

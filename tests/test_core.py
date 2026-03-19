@@ -299,6 +299,80 @@ class TestValidation:
                 max_hold=10,
             )
 
+    def test_signal_bars_out_of_range_raises(self, simple_uptrend):
+        """signal_bars >= n_bars should raise ValueError."""
+        high, low, close = simple_uptrend  # 100 bars
+        with pytest.raises(ValueError, match="out-of-range"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([100], dtype=np.int32),  # exactly n_bars
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([5.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=10,
+                preflight=False,
+            )
+
+    def test_signal_bars_negative_raises(self):
+        """Negative signal_bars should raise ValueError."""
+        close = np.arange(100.0, 110.0)
+        high = close + 0.5
+        low = close - 0.5
+        with pytest.raises(ValueError, match="out-of-range"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([-1], dtype=np.int32),
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([5.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=10,
+                preflight=False,
+            )
+
+    def test_sl_distances_zero_raises(self, simple_uptrend):
+        """sl_distances <= 0 should raise ValueError (division by zero)."""
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match="sl_distances must be > 0"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([0], dtype=np.int32),
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([0.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=10,
+                preflight=False,
+            )
+
+    def test_sl_distances_negative_raises(self, simple_uptrend):
+        """Negative sl_distances should raise ValueError."""
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match="sl_distances must be > 0"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([0], dtype=np.int32),
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([-1.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=10,
+                preflight=False,
+            )
+
+    def test_nan_close_raises(self):
+        """NaN in close array should raise ValueError."""
+        close = np.array([100.0, np.nan, 102.0, 103.0, 104.0])
+        high = close + 0.5
+        low = close - 0.5
+        with pytest.raises(ValueError, match="close contains NaN"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([0], dtype=np.int32),
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([5.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=10,
+                preflight=False,
+            )
+
     def test_unknown_exit_mode(self, simple_uptrend):
         high, low, close = simple_uptrend
         with pytest.raises(ValueError, match="Unknown exit_mode"):
@@ -782,3 +856,330 @@ class TestFundoraCost:
         """XAUUSD pip_value should be 1.0."""
         cost = BrokerCost.fundora()
         assert cost.pip_values["XAUUSD"] == pytest.approx(1.0)
+
+
+# ── Trailing Mode Open Entry Tests ──────────────────────────────────────────
+
+class TestTrailingOpenEntry:
+    def test_trailing_open_entry_timing(self):
+        """Trailing mode should use next-bar open when open_prices provided."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            close[i] = 100.0 + i * 1.0
+        high = close + 0.5
+        low = close - 0.5
+        open_prices = close - 0.2
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([5], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="trailing",
+            trail_activation_r=1.0,
+            trail_distance_r=0.5,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 6
+
+    def test_trailing_open_entry_last_bar_no_fill(self):
+        """Trailing mode: signal on last bar with open_prices → NO_FILL."""
+        n = 10
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 100.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([9], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=n,
+            exit_mode="trailing",
+            trail_activation_r=1.0,
+            trail_distance_r=0.5,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_NO_FILL
+        assert r["pnl_r"] == 0.0
+
+    def test_trailing_open_entry_checks_entry_bar_sl(self):
+        """Trailing open entry must check SL on the entry bar itself."""
+        close = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        open_prices = np.array([100.0, 100.0, 100.0], dtype=np.float64)
+        high = np.array([100.5, 100.5, 100.5], dtype=np.float64)
+        low = np.array([99.5, 94.0, 99.5], dtype=np.float64)  # bar 1 hits SL
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([50.0], dtype=np.float64),
+            max_hold=5,
+            exit_mode="trailing",
+            trail_activation_r=2.0,
+            trail_distance_r=1.0,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 1
+        assert r["exit_bar"] == 1
+        assert r["hold_bars"] == 0
+        assert r["exit_type"] == EXIT_SL
+        assert r["pnl_r"] == pytest.approx(-1.0)
+
+    def test_trailing_backward_compat(self, simple_uptrend):
+        """Trailing without open_prices should use close entry (backward compat)."""
+        high, low, close = simple_uptrend
+        result = _single_trade(
+            high, low, close, LONG,
+            sl_dist=5.0, tp_dist=10.0, max_hold=50,
+            exit_mode="trailing",
+            trail_activation_r=1.0,
+            trail_distance_r=0.5,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 0  # close-entry at sig_bar
+
+
+# ── FIX-1 Regression: Trailing Phantom Profit ──────────────────────────────
+
+class TestTrailingPhantomProfitFix:
+    """Regression tests: trailing stop must check SL with OLD best_price."""
+
+    def test_long_trail_conservative_sl(self):
+        """LONG: bar has high that would improve trail, but low hits old SL."""
+        n = 20
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        for i in range(1, 10):
+            close[i] = 100.0 + i * 1.25
+        close[10] = 108.0
+        for i in range(11, n):
+            close[i] = 108.0
+        high = close + 0.5
+        low = close - 0.5
+        high[10] = 115.0
+        low[10] = 104.0
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="trailing",
+            trail_activation_r=1.5,
+            trail_distance_r=1.0,
+        )
+        r = result[0]
+        # Must exit via SL or TRAIL — NOT timeout with phantom profit
+        assert r["exit_type"] in (EXIT_TRAIL, EXIT_SL)
+        # Buggy code: best_price updated to bar 10's high (115.0) BEFORE SL check
+        #   → trail_sl = 115.0 - 5.0 = 110.0 → pnl_r = (110-100)/5 = 2.0 (phantom)
+        # Fixed code: SL checked against bar 9's best_price (111.75)
+        #   → trail_sl = 111.75 - 5.0 = 106.75 → pnl_r = (106.75-100)/5 = 1.35
+        assert r["pnl_r"] < (115.0 - 100.0 - 5.0) / 5.0   # < 2.0R (phantom value)
+        assert r["pnl_r"] == pytest.approx(1.35, abs=0.1)   # conservative exit
+
+    def test_short_trail_conservative_sl(self):
+        """SHORT: bar has low that would improve trail, but high hits old SL."""
+        n = 20
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        for i in range(1, 10):
+            close[i] = 100.0 - i * 1.25
+        close[10] = 92.0
+        for i in range(11, n):
+            close[i] = 92.0
+        high = close + 0.5
+        low = close - 0.5
+        high[10] = 96.0
+        low[10] = 85.0
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([SHORT], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="trailing",
+            trail_activation_r=1.5,
+            trail_distance_r=1.0,
+        )
+        r = result[0]
+        assert r["exit_type"] in (EXIT_TRAIL, EXIT_SL)
+        # Same phantom profit prevention for SHORT side
+        assert r["pnl_r"] < (100.0 - 85.0 - 5.0) / 5.0    # < 2.0R
+        assert r["pnl_r"] == pytest.approx(1.35, abs=0.1)   # conservative exit
+
+    def test_trail_no_change_when_bar_doesnt_improve(self):
+        """Normal trailing behavior unchanged when bar doesn't create ambiguity."""
+        n = 30
+        close = np.empty(n, dtype=np.float64)
+        close[0] = 100.0
+        for i in range(1, 15):
+            close[i] = 100.0 + i * 2.0
+        for i in range(15, n):
+            close[i] = close[14] - (i - 14) * 3.0
+        high = close + 1.0
+        low = close - 1.0
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="trailing",
+            trail_activation_r=2.0,
+            trail_distance_r=1.0,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_TRAIL
+        assert r["pnl_r"] > 0.0
+
+
+# ── FIX-8: Entry Costs ─────────────────────────────────────────────────────
+
+class TestEntryCosts:
+    def test_cost_r_field_exists(self, simple_uptrend):
+        """Output should have cost_r field defaulting to 0."""
+        high, low, close = simple_uptrend
+        result = _single_trade(high, low, close, LONG, 5.0, 10.0, 50)
+        assert "cost_r" in result.dtype.names
+        assert result[0]["cost_r"] == 0.0
+
+    def test_entry_costs_subtracted(self, simple_uptrend):
+        """entry_costs should be subtracted from pnl_r."""
+        high, low, close = simple_uptrend
+        r_no_cost = _single_trade(high, low, close, LONG, 5.0, 10.0, 50)
+        pnl_no_cost = r_no_cost[0]["pnl_r"]
+
+        costs = np.array([0.1], dtype=np.float64)
+        r_with_cost = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([0], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=50,
+            entry_costs=costs,
+        )
+        assert r_with_cost[0]["pnl_r"] == pytest.approx(pnl_no_cost - 0.1)
+        assert r_with_cost[0]["cost_r"] == pytest.approx(0.1)
+
+    def test_no_fill_gets_zero_cost(self):
+        """NO_FILL trades should have cost_r=0."""
+        n = 10
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 100.0, dtype=np.float64)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([9], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=n,
+            open_prices=open_prices,
+            entry_costs=np.array([0.1], dtype=np.float64),
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_NO_FILL
+        assert r["pnl_r"] == 0.0
+        assert r["cost_r"] == 0.0
+
+    def test_entry_costs_wrong_length_raises(self, simple_uptrend):
+        """entry_costs with wrong length should raise ValueError."""
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match="entry_costs"):
+            simulate_trades(
+                high, low, close,
+                signal_bars=np.array([0], dtype=np.int32),
+                directions=np.array([LONG], dtype=np.int8),
+                sl_distances=np.array([5.0], dtype=np.float64),
+                tp_distances=np.array([10.0], dtype=np.float64),
+                max_hold=50,
+                entry_costs=np.array([0.1, 0.2], dtype=np.float64),
+            )
+
+
+# ── Custom Mode Open Entry Tests ────────────────────────────────────────────
+
+class TestCustomOpenEntry:
+    def test_custom_open_entry_timing(self):
+        """Custom mode should use next-bar open when open_prices provided."""
+        n = 30
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 99.8, dtype=np.float64)
+        exit_signals = np.zeros(n, dtype=np.bool_)
+        exit_signals[10] = True
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([5], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([50.0], dtype=np.float64),
+            tp_distances=np.array([1e6], dtype=np.float64),
+            max_hold=n,
+            exit_mode="custom",
+            exit_signals=exit_signals,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 6
+
+    def test_custom_open_entry_last_bar_no_fill(self):
+        """Custom mode: signal on last bar with open_prices → NO_FILL."""
+        n = 10
+        close = np.full(n, 100.0, dtype=np.float64)
+        high = np.full(n, 100.5, dtype=np.float64)
+        low = np.full(n, 99.5, dtype=np.float64)
+        open_prices = np.full(n, 100.0, dtype=np.float64)
+        exit_signals = np.zeros(n, dtype=np.bool_)
+
+        result = simulate_trades(
+            high, low, close,
+            signal_bars=np.array([9], dtype=np.int32),
+            directions=np.array([LONG], dtype=np.int8),
+            sl_distances=np.array([5.0], dtype=np.float64),
+            tp_distances=np.array([10.0], dtype=np.float64),
+            max_hold=n,
+            exit_mode="custom",
+            exit_signals=exit_signals,
+            open_prices=open_prices,
+        )
+        r = result[0]
+        assert r["exit_type"] == EXIT_NO_FILL
+        assert r["pnl_r"] == 0.0
+
+    def test_custom_backward_compat(self, flat_market):
+        """Custom without open_prices should use close entry (backward compat)."""
+        high, low, close = flat_market
+        exit_signals = np.zeros(len(close), dtype=np.bool_)
+        exit_signals[5] = True
+
+        result = _single_trade(
+            high, low, close, LONG,
+            sl_dist=10.0, tp_dist=20.0, max_hold=80,
+            exit_mode="custom",
+            exit_signals=exit_signals,
+        )
+        r = result[0]
+        assert r["entry_bar"] == 0  # close-entry at sig_bar

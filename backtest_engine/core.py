@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import numba
 
@@ -10,6 +12,8 @@ from backtest_engine._types import (
     EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_BE, EXIT_NO_FILL, EXIT_TRAIL, EXIT_CUSTOM,
     TRADE_RESULT_DTYPE,
 )
+from backtest_engine.preflight import run_preflight, BacktestQualityWarning
+from backtest_engine._results import TradeResults
 
 # ---------------------------------------------------------------------------
 # Inner @njit kernels (one per exit mode)
@@ -234,6 +238,7 @@ def _sim_trailing_inner(
     signal_bars, directions, sl_distances, tp_distances,
     max_hold,
     trail_activation_r, trail_distance_r,
+    open_prices, use_open_entry,
 ):
     """Trailing stop simulation."""
     n_trades = len(signal_bars)
@@ -253,14 +258,31 @@ def _sim_trailing_inner(
         sl_dist = sl_distances[t]
         tp_dist = tp_distances[t]
         ref_price = close[sig_bar]
-        entry_price = ref_price
-        entry_bar[t] = sig_bar
 
+        # --- Entry logic ---
+        if use_open_entry:
+            e_bar = sig_bar + 1
+            if e_bar >= n_bars:
+                pnl_r[t] = 0.0
+                hold_bars[t] = 0
+                exit_type[t] = EXIT_NO_FILL
+                mfe_r[t] = 0.0
+                mae_r[t] = 0.0
+                entry_bar[t] = sig_bar
+                exit_bar[t] = sig_bar
+                continue
+            entry_price = open_prices[e_bar]
+            entry_bar[t] = e_bar
+        else:
+            entry_price = ref_price
+            entry_bar[t] = sig_bar
+
+        sl_ref_price = entry_price if use_open_entry else ref_price
         if direction == LONG:
-            sl_price = ref_price - sl_dist
+            sl_price = sl_ref_price - sl_dist
             tp_price = entry_price + tp_dist
         else:
-            sl_price = ref_price + sl_dist
+            sl_price = sl_ref_price + sl_dist
             tp_price = entry_price - tp_dist
 
         trail_active = False
@@ -276,28 +298,11 @@ def _sim_trailing_inner(
         else:
             best_price = entry_price
 
-        start_bar = sig_bar + 1
-        end_bar = min(sig_bar + max_hold + 1, n_bars)
+        start_bar = entry_bar[t] if use_open_entry else entry_bar[t] + 1
+        end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
 
         for b in range(start_bar, end_bar):
-            # Update best price for trailing
-            if direction == LONG:
-                if high[b] > best_price:
-                    best_price = high[b]
-            else:
-                if low[b] < best_price:
-                    best_price = low[b]
-
-            # Activation check
-            if not trail_active:
-                if direction == LONG:
-                    if best_price >= entry_price + activation_abs:
-                        trail_active = True
-                else:
-                    if best_price <= entry_price - activation_abs:
-                        trail_active = True
-
-            # Determine current SL
+            # Determine current SL using OLD best_price (before this bar's update)
             if trail_active:
                 if direction == LONG:
                     trail_sl = best_price - trail_dist_abs
@@ -370,6 +375,23 @@ def _sim_trailing_inner(
                         worst_mae = bar_mae
                     break
 
+            # Update best price for trailing (AFTER SL/TP checks)
+            if direction == LONG:
+                if high[b] > best_price:
+                    best_price = high[b]
+            else:
+                if low[b] < best_price:
+                    best_price = low[b]
+
+            # Activation check (AFTER price update)
+            if not trail_active:
+                if direction == LONG:
+                    if best_price >= entry_price + activation_abs:
+                        trail_active = True
+                else:
+                    if best_price <= entry_price - activation_abs:
+                        trail_active = True
+
             # MFE / MAE
             if direction == LONG:
                 bar_mfe = (high[b] - entry_price) / sl_dist
@@ -405,6 +427,7 @@ def _sim_custom_inner(
     signal_bars, directions, sl_distances, tp_distances,
     max_hold,
     exit_signals,
+    open_prices, use_open_entry,
 ):
     """Custom exit signal simulation."""
     n_trades = len(signal_bars)
@@ -424,19 +447,36 @@ def _sim_custom_inner(
         sl_dist = sl_distances[t]
         tp_dist = tp_distances[t]
         ref_price = close[sig_bar]
-        entry_price = ref_price
-        entry_bar[t] = sig_bar
 
-        if direction == LONG:
-            sl_price = ref_price - sl_dist
+        # --- Entry logic ---
+        if use_open_entry:
+            e_bar = sig_bar + 1
+            if e_bar >= n_bars:
+                pnl_r[t] = 0.0
+                hold_bars[t] = 0
+                exit_type[t] = EXIT_NO_FILL
+                mfe_r[t] = 0.0
+                mae_r[t] = 0.0
+                entry_bar[t] = sig_bar
+                exit_bar[t] = sig_bar
+                continue
+            entry_price = open_prices[e_bar]
+            entry_bar[t] = e_bar
         else:
-            sl_price = ref_price + sl_dist
+            entry_price = ref_price
+            entry_bar[t] = sig_bar
+
+        sl_ref_price = entry_price if use_open_entry else ref_price
+        if direction == LONG:
+            sl_price = sl_ref_price - sl_dist
+        else:
+            sl_price = sl_ref_price + sl_dist
 
         best_mfe = 0.0
         worst_mae = 0.0
         trade_closed = False
-        start_bar = sig_bar + 1
-        end_bar = min(sig_bar + max_hold + 1, n_bars)
+        start_bar = entry_bar[t] if use_open_entry else entry_bar[t] + 1
+        end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
 
         for b in range(start_bar, end_bar):
             # SL check (always active, priority)
@@ -765,7 +805,9 @@ def simulate_trades(
     # SAR trailing mode options
     sar_values: np.ndarray | None = None,
     open_prices: np.ndarray | None = None,
-) -> np.ndarray:
+    entry_costs: np.ndarray | None = None,
+    preflight: bool = True,
+) -> TradeResults:
     """Simulate trades and return a structured array of results.
 
     Parameters
@@ -785,13 +827,31 @@ def simulate_trades(
     exit_signals : Boolean array (same length as close) for custom exits.
     sar_values : Pre-computed Parabolic SAR array for sar_trailing mode.
     open_prices : Optional bar-open prices for next-bar-open entry.
-                  Supported for "rr" and "sar_trailing".
+                  Supported for all exit modes ("rr", "trailing", "custom", "sar_trailing").
                   If None, falls back to close[sig_bar] entry (backward compat).
+    entry_costs : Optional 1-D float64 array of per-trade costs in R-units.
+                  Applied post-kernel: subtracted from pnl_r. NO_FILL trades get 0.
+                  Use BrokerCost.per_trade_cost() to compute from spread arrays.
+                  If None, cost_r=0.0 (backward compatible).
+    preflight : If True (default), run pre-flight quality check and emit
+                BacktestQualityWarning when grade < A. Set False to suppress.
 
     Returns
     -------
-    Structured numpy array with TRADE_RESULT_DTYPE fields.
+    TradeResults (numpy structured array subclass with TRADE_RESULT_DTYPE).
+    Access ``results.quality.grade`` for quality grade ("A"/"B"/"C").
     """
+    # --- Pre-flight quality check ---
+    quality_report = None
+    if preflight:
+        quality_report = run_preflight(open_prices, entry_costs)
+        if quality_report.grade != "A":
+            warnings.warn(
+                quality_report.format_message(),
+                BacktestQualityWarning,
+                stacklevel=2,
+            )
+
     # --- Input validation and dtype coercion ---
     high = np.ascontiguousarray(high, dtype=np.float64)
     low = np.ascontiguousarray(low, dtype=np.float64)
@@ -809,8 +869,21 @@ def simulate_trades(
     if not (len(high) == len(low) == n_bars):
         raise ValueError("high, low, close must have equal length")
 
+    # --- Value validation (prevents garbage output / kernel crashes) ---
+    if np.any(np.isnan(close)):
+        raise ValueError("close contains NaN — clean data before simulation")
+    if n_trades > 0:
+        if np.any(signal_bars < 0) or np.any(signal_bars >= n_bars):
+            bad = signal_bars[(signal_bars < 0) | (signal_bars >= n_bars)]
+            raise ValueError(
+                f"signal_bars contains out-of-range indices {bad[:5].tolist()} "
+                f"(valid range: 0..{n_bars - 1})"
+            )
+        if np.any(sl_distances <= 0):
+            raise ValueError("sl_distances must be > 0 (used as divisor for R-multiples)")
+
     if n_trades == 0:
-        return np.empty(0, dtype=TRADE_RESULT_DTYPE)
+        return TradeResults(np.empty(0, dtype=TRADE_RESULT_DTYPE), quality=quality_report)
 
     # --- Dispatch to appropriate kernel ---
     if exit_mode == "rr":
@@ -831,11 +904,20 @@ def simulate_trades(
             open_arr, use_open_entry,
         )
     elif exit_mode == "trailing":
+        if open_prices is not None:
+            open_arr = np.ascontiguousarray(open_prices, dtype=np.float64)
+            if len(open_arr) != n_bars:
+                raise ValueError("open_prices must have same length as price arrays")
+            use_open_entry = True
+        else:
+            open_arr = close          # dummy — unused when use_open_entry=False
+            use_open_entry = False
         result_tuple = _sim_trailing_inner(
             high, low, close,
             signal_bars, directions, sl_distances, tp_distances,
             max_hold,
             trail_activation_r, trail_distance_r,
+            open_arr, use_open_entry,
         )
     elif exit_mode == "sar_trailing":
         if sar_values is None:
@@ -864,11 +946,20 @@ def simulate_trades(
         exit_signals = np.ascontiguousarray(exit_signals, dtype=np.bool_)
         if len(exit_signals) != n_bars:
             raise ValueError("exit_signals must have same length as price arrays")
+        if open_prices is not None:
+            open_arr = np.ascontiguousarray(open_prices, dtype=np.float64)
+            if len(open_arr) != n_bars:
+                raise ValueError("open_prices must have same length as price arrays")
+            use_open_entry = True
+        else:
+            open_arr = close          # dummy — unused when use_open_entry=False
+            use_open_entry = False
         result_tuple = _sim_custom_inner(
             high, low, close,
             signal_bars, directions, sl_distances, tp_distances,
             max_hold,
             exit_signals,
+            open_arr, use_open_entry,
         )
     else:
         raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', 'sar_trailing', or 'custom'.")
@@ -883,4 +974,18 @@ def simulate_trades(
     out["mae_r"] = mae_r
     out["entry_bar"] = entry_bar
     out["exit_bar"] = exit_bar_arr
-    return out
+
+    # --- Apply per-trade costs (post-kernel) ---
+    if entry_costs is not None:
+        costs = np.ascontiguousarray(entry_costs, dtype=np.float64)
+        if len(costs) != n_trades:
+            raise ValueError("entry_costs must have same length as signal_bars")
+        # Zero out cost for NO_FILL trades
+        no_fill_mask = exit_type_arr == EXIT_NO_FILL
+        costs_applied = np.where(no_fill_mask, 0.0, costs)
+        out["pnl_r"] -= costs_applied
+        out["cost_r"] = costs_applied
+    else:
+        out["cost_r"] = 0.0
+
+    return TradeResults(out, quality=quality_report)

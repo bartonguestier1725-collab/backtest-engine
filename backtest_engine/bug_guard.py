@@ -5,7 +5,7 @@ automated check. This module MUST be used before reporting any backtest result.
 
 Incident log (why each check exists):
   BG-01: Look-ahead bias — signal from bar[N], entry at bar[N] (2026-02-28 v1)
-  BG-02: Cost underestimation — JPY commission missing from fundora() (2026-02-28)
+  BG-02: Cost underestimation — JPY commission missing from cost model (2026-02-28)
   BG-03: Commission one-way — $6 RT treated as $3 one-way (2026-02-17)
   BG-04: bfill data leak — future values used to fill NaN (2026-02-28 v2)
   BG-05: 1h OHLC phantom wins — SL/TP hit order unknown in bar (2026-02-28 v5)
@@ -22,6 +22,7 @@ from __future__ import annotations
 import inspect
 import re
 import textwrap
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -31,8 +32,8 @@ import numpy as np
 # ── Known-good cost registry (measured 2026-02) ────────────────────────────
 
 # Total round-trip cost in PIPS (spread + commission).
-# Source: actual Fundora trading, not published typical spreads.
-FUNDORA_COST_PIPS = {
+# Source: actual trading, not published typical spreads.
+_FUNDORA_COST_PIPS = {
     # Measured directly
     "EURUSD": 0.75,   # spread 0.15 + commission 0.60
     "USDJPY": 1.70,   # spread 0.80 + commission 0.90
@@ -65,26 +66,37 @@ FUNDORA_COST_PIPS = {
     "AUDCHF": 1.60,   # spread ~1.0 + commission 0.60
     "NZDCHF": 1.80,   # spread ~1.2 + commission 0.60
     "EURCHF": 1.40,   # spread ~0.8 + commission 0.60
-    "CADCHF": 1.60,   # spread ~1.0 + commission 0.60
 }
 
-PIP_SIZES = {}
-for _p in FUNDORA_COST_PIPS:
+_PIP_SIZES = {}
+for _p in _FUNDORA_COST_PIPS:
     if _p == "XAUUSD":
-        PIP_SIZES[_p] = 0.01
+        _PIP_SIZES[_p] = 0.01
     elif _p.endswith("JPY"):
-        PIP_SIZES[_p] = 0.01
+        _PIP_SIZES[_p] = 0.01
     else:
-        PIP_SIZES[_p] = 0.0001
+        _PIP_SIZES[_p] = 0.0001
 
 
-def cost_pips_to_price(pair: str) -> float:
+def _cost_pips_to_price(pair: str) -> float:
     """Convert known-good cost from pips to price units."""
-    pips = FUNDORA_COST_PIPS.get(pair)
-    pip_size = PIP_SIZES.get(pair, 0.0001)
+    pips = _FUNDORA_COST_PIPS.get(pair)
+    pip_size = _PIP_SIZES.get(pair, 0.0001)
     if pips is None:
         return 0.0
     return pips * pip_size
+
+
+def _fundora_expected_costs() -> dict[str, float]:
+    """Build expected_costs dict for Fundora.
+
+    Delegates to ``BrokerCost.fundora().cost_prices()`` so that only one
+    cost registry exists.  The legacy ``_FUNDORA_COST_PIPS`` dict is kept
+    for reference but is no longer used in validation.
+    """
+    from backtest_engine.costs import BrokerCost
+
+    return BrokerCost.fundora().cost_prices()
 
 
 # ── Check results ──────────────────────────────────────────────────────────
@@ -162,31 +174,40 @@ def check_look_ahead(signal_bars: np.ndarray, entry_bars: np.ndarray) -> CheckRe
 
 def check_cost_registry(
     spreads_used: dict[str, float],
-    broker: str = "fundora",
+    expected_costs: dict[str, float] | None = None,
     tolerance: float = 0.20,
 ) -> CheckResult:
-    """BG-02/03/11: Verify costs match known-good registry.
+    """BG-02/03/11: Verify costs match expected values.
 
     Catches: JPY commission missing, one-way commission, published spread used.
-    tolerance: max fractional deviation allowed (0.20 = 20%).
+
+    Parameters
+    ----------
+    spreads_used : {pair: cost_in_price_units} actually used in the backtest.
+    expected_costs : {pair: cost_in_price_units} expected (e.g. from
+                     BrokerCost.cost_prices()). If None, the check is skipped.
+    tolerance : max fractional deviation allowed (0.20 = 20%).
     """
-    if broker != "fundora":
-        return CheckResult("BG-02", True, f"No registry for broker '{broker}', skipped")
+    if expected_costs is None:
+        return CheckResult(
+            "BG-02", False,
+            "No expected costs provided. Pass expected_costs=BrokerCost.cost_prices() "
+            "to validate cost accuracy.",
+            severity="WARN",
+        )
 
     errors = []
     for pair, used_price in spreads_used.items():
-        expected_price = cost_pips_to_price(pair)
-        if expected_price == 0:
+        expected_price = expected_costs.get(pair)
+        if expected_price is None or expected_price == 0:
             continue
         if used_price == 0:
             errors.append(f"{pair}: cost=0 (expected {expected_price:.6f})")
             continue
         ratio = used_price / expected_price
         if ratio < (1 - tolerance):
-            used_pips = used_price / PIP_SIZES.get(pair, 0.0001)
-            exp_pips = FUNDORA_COST_PIPS.get(pair, 0)
             errors.append(
-                f"{pair}: {used_pips:.2f}pip used vs {exp_pips:.2f}pip expected "
+                f"{pair}: {used_price:.6f} used vs {expected_price:.6f} expected "
                 f"({ratio:.0%} — UNDER by {(1-ratio)*100:.0f}%)"
             )
     if errors:
@@ -360,6 +381,96 @@ def check_entry_price_type(source_path: str | Path) -> CheckResult:
     return CheckResult("BG-09", True, "Entry price does not use Close")
 
 
+def check_open_prices_provided(open_prices_provided: bool) -> CheckResult:
+    """BG-09b: Verify that open_prices are used for entry.
+
+    When open_prices is not provided to simulate_trades(), entry occurs at
+    close[signal_bar] which uses information not available at signal time.
+    This is the API-level complement to BG-09's source code scan.
+
+    Parameters
+    ----------
+    open_prices_provided : True if open_prices was passed to simulate_trades().
+    """
+    if not open_prices_provided:
+        return CheckResult(
+            "BG-09b", False,
+            "ENTRY AT CLOSE: open_prices not provided to simulate_trades(). "
+            "Trades enter at close[signal_bar], which is a look-ahead bias. "
+            "Pass open_prices= to use next-bar-open entry.",
+            severity="WARN",
+        )
+    return CheckResult("BG-09b", True, "open_prices provided for next-bar-open entry")
+
+
+def check_fixed_cost_usage(
+    sl_distances: np.ndarray,
+    cost_is_fixed: bool = False,
+) -> CheckResult:
+    """BG-12: Warn if fixed cost is used with varying SL distances.
+
+    When SL distance varies across trades (ATR-based), using a fixed cost_r
+    (scalar) is inaccurate. Use BrokerCost.per_trade_cost() instead.
+
+    Parameters
+    ----------
+    sl_distances : SL distances for all trades.
+    cost_is_fixed : True if caller used scalar as_r() instead of per-trade cost.
+    """
+    if not cost_is_fixed:
+        return CheckResult("BG-12", True, "Per-trade cost used (correct)")
+
+    if len(sl_distances) < 2:
+        return CheckResult("BG-12", True, "Too few trades to check cost variation")
+
+    cv = np.std(sl_distances) / np.mean(sl_distances) if np.mean(sl_distances) > 0 else 0.0
+    if cv > 0.10:
+        return CheckResult(
+            "BG-12", False,
+            f"FIXED COST WITH VARYING SL: SL distance CV={cv:.1%}. "
+            f"Use BrokerCost.per_trade_cost() for accurate per-trade costs.",
+            severity="WARN",
+        )
+    return CheckResult("BG-12", True, f"SL distance CV={cv:.1%} — fixed cost acceptable")
+
+
+def check_spread_filter(
+    signal_spreads: np.ndarray | None = None,
+    max_spread: float = 0.0,
+) -> CheckResult:
+    """BG-13: Verify backtest signals respect max spread constraint.
+
+    If a max_spread filter is used in live trading, the backtest should
+    also filter out signals where spread exceeded the threshold.
+
+    Parameters
+    ----------
+    signal_spreads : Spread at signal time for each trade. None if not tracked.
+    max_spread : Maximum spread allowed (in price units). 0 = no constraint.
+    """
+    if max_spread <= 0.0:
+        return CheckResult("BG-13", True, "No spread filter constraint to check")
+    if signal_spreads is None:
+        return CheckResult(
+            "BG-13", False,
+            f"max_spread={max_spread:.6f} specified but signal_spreads not provided. "
+            "Cannot verify backtest/live spread parity.",
+            severity="WARN",
+        )
+
+    violations = np.sum(signal_spreads > max_spread)
+    if violations > 0:
+        pct = violations / len(signal_spreads) * 100
+        return CheckResult(
+            "BG-13", False,
+            f"SPREAD FILTER LEAK: {violations}/{len(signal_spreads)} signals "
+            f"({pct:.1f}%) had spread > {max_spread:.6f}. "
+            f"Apply spread filter in backtest to match live behavior.",
+            severity="WARN",
+        )
+    return CheckResult("BG-13", True, f"All {len(signal_spreads)} signals within max_spread")
+
+
 def check_incomplete_bars(
     timestamps: np.ndarray,
     expected_interval_minutes: int = 60,
@@ -396,14 +507,20 @@ def run_all_checks(
     entry_bars: Optional[np.ndarray] = None,
     exit_bars: Optional[np.ndarray] = None,
     spreads_used: Optional[dict[str, float]] = None,
-    broker: str = "fundora",
+    expected_costs: Optional[dict[str, float]] = None,
     resolution_minutes: int = 60,
     n_bars: int = 0,
     bar_minutes: int = 60,
     n_trades: int = 0,
     min_months: int = 12,
     min_trades: int = 100,
+    open_prices_provided: Optional[bool] = None,
+    sl_distances: Optional[np.ndarray] = None,
+    cost_is_fixed: bool = False,
+    signal_spreads: Optional[np.ndarray] = None,
+    max_spread: float = 0.0,
     strict: bool = True,
+    **kwargs,
 ) -> GuardReport:
     """Run all applicable checks and return a report.
 
@@ -414,15 +531,36 @@ def run_all_checks(
     entry_bars : Array of bar indices where trades were entered.
     exit_bars : Array of bar indices where trades were exited.
     spreads_used : Dict of {pair: cost_in_price_units} used in the backtest.
-    broker : Broker name for cost registry lookup.
+    expected_costs : Dict of {pair: cost_in_price_units} for cost validation.
+                     Use BrokerCost.cost_prices() to generate this.
+                     If None, cost check is skipped.
     resolution_minutes : Bar size used for SL/TP simulation.
     n_bars : Number of bars in the dataset.
     bar_minutes : Size of each bar in minutes.
     n_trades : Total number of trades.
     min_months : Minimum data period in months.
     min_trades : Minimum trade count.
+    open_prices_provided : True if open_prices was passed to simulate_trades().
+    sl_distances : SL distances for all trades (for BG-12 fixed-cost check).
+    cost_is_fixed : True if scalar cost was used instead of per-trade cost.
+    signal_spreads : Spread at signal time for each trade (for BG-13).
+    max_spread : Maximum spread allowed in price units (for BG-13). 0 = no check.
     strict : If True, assert_passed() is called (raises on ERROR).
     """
+    # Backward compat: accept deprecated broker kwarg
+    if "broker" in kwargs:
+        warnings.warn(
+            "broker parameter is deprecated. "
+            "Use expected_costs=BrokerCost.fundora().cost_prices() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        broker = kwargs.pop("broker")
+        if expected_costs is None and broker == "fundora":
+            expected_costs = _fundora_expected_costs()
+    if kwargs:
+        raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
     report = GuardReport()
 
     # Source code checks
@@ -439,7 +577,7 @@ def run_all_checks(
 
     # Cost checks
     if spreads_used is not None:
-        report.results.append(check_cost_registry(spreads_used, broker))
+        report.results.append(check_cost_registry(spreads_used, expected_costs))
 
     # Data quality checks
     report.results.append(check_resolution(resolution_minutes))
@@ -447,6 +585,18 @@ def run_all_checks(
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))
     if n_trades > 0:
         report.results.append(check_min_trades(n_trades, min_trades))
+
+    # API-level entry check
+    if open_prices_provided is not None:
+        report.results.append(check_open_prices_provided(open_prices_provided))
+
+    # BG-12: Fixed cost with varying SL
+    if sl_distances is not None:
+        report.results.append(check_fixed_cost_usage(sl_distances, cost_is_fixed))
+
+    # BG-13: Spread filter violations
+    if signal_spreads is not None or max_spread > 0.0:
+        report.results.append(check_spread_filter(signal_spreads, max_spread))
 
     report.print_report()
 

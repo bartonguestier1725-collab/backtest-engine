@@ -39,6 +39,10 @@ class BrokerCost:
         commission_price = self.commission_per_lot * pip_size / pip_value
         return spread + commission_price
 
+    def cost_prices(self) -> dict[str, float]:
+        """Return {instrument: total_RT_cost_in_price_units} for all instruments."""
+        return {inst: self.cost_price(inst) for inst in self.spreads}
+
     def as_r(self, instrument: str, risk_price: float) -> float:
         """Cost as a fraction of risk (R-units).
 
@@ -60,6 +64,27 @@ class BrokerCost:
             costs[i] = self.as_r(inst, risk_prices[i])
         return costs
 
+    def per_trade_cost(
+        self,
+        instruments: list[str],
+        sl_distances: np.ndarray,
+    ) -> np.ndarray:
+        """Per-trade cost in R-units for an array of trades.
+
+        Equivalent to as_r_array but named for clarity in the
+        simulate_trades(entry_costs=...) workflow.
+
+        Parameters
+        ----------
+        instruments : List of instrument names, one per trade.
+        sl_distances : SL distances in price units, one per trade.
+
+        Returns
+        -------
+        1-D float64 array of costs in R-units.
+        """
+        return self.as_r_array(instruments, sl_distances)
+
     # --- Presets ---
 
     @classmethod
@@ -75,11 +100,17 @@ class BrokerCost:
             "EURCAD": 0.00005, "GBPCAD": 0.00006, "CADCHF": 0.00005,
             "CADJPY": 0.005, "CHFJPY": 0.005, "NZDJPY": 0.005,
             "GBPCHF": 0.00006, "AUDCHF": 0.00005, "NZDCHF": 0.00006,
+            "EURCHF": 0.00004,
+            # Metals — pip_size=0.01, pip_value=$1.00/lot
+            "XAUUSD": 0.20,
         }
         pip_sizes = {}
         pip_values = {}
         for inst in spreads:
-            if inst.endswith("JPY"):
+            if inst == "XAUUSD":
+                pip_sizes[inst] = 0.01
+                pip_values[inst] = 1.0
+            elif inst.endswith("JPY"):
                 pip_sizes[inst] = 0.01
                 pip_values[inst] = 6.67  # approx for JPY pairs (1000 JPY per lot)
             else:
@@ -105,6 +136,7 @@ class BrokerCost:
             "EURCAD": 0.00016, "GBPCAD": 0.00018, "CADCHF": 0.00016,
             "CADJPY": 0.016, "CHFJPY": 0.016, "NZDJPY": 0.016,
             "GBPCHF": 0.00018, "AUDCHF": 0.00016, "NZDCHF": 0.00018,
+            "EURCHF": 0.00014,
             # Metals — pip_size=0.01, pip_value=$1.00/lot
             "XAUUSD": 0.40,
         }
