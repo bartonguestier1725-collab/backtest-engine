@@ -13,14 +13,16 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 - **`simulate_trades()`** — SL/TP/trailing/SAR trailing/limit entry/custom exit, all `@njit` kernels. Supports next-bar-open entry via `open_prices` in all modes
 - **Indicators** — SMA, ATR, Bollinger Bands, RCI, Parabolic SAR, expanding quantile, multi-timeframe mapping (all `@njit`)
 - **Monte Carlo DD** — 10,000-shuffle drawdown distribution, Kelly criterion, optimal risk sizing, prop firm DD check
+- **StressTest** — block bootstrap (preserves losing-streak autocorrelation), parameter degradation scenarios (win rate / RR / cost what-if)
 - **Walk-Forward / CSCV** — out-of-sample validation with IS/OOS ratio and Probability of Backtest Overfitting (PBO, Bailey 2015)
+- **TradeResults** — structured array with convenience metrics: profit factor, win rate, expectancy, Sharpe/Sortino, max drawdown, recovery factor
 - **Utilities** — CSV loading, OHLC resampling, higher-TF indicator mapping
 
 ### Opinionated modules (FX defaults, fully customizable)
 
 - **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
 - **BugGuard** — 14 automated checks (BG-01–BG-13) that catch look-ahead bias, cost underestimation, fixed-cost misuse, spread filter violations, overfitting, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market
-- **GateKeeper** — fast-kill pipeline (Gate 0–2) that eliminates hopeless parameter combos early. Thresholds (PF, RF, trades) are class variables — override them for your asset class
+- **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard, Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
 
 ## Install
 
@@ -215,15 +217,33 @@ gk = GateKeeper(
     expected_costs=BrokerCost.tradeview_ilc().cost_prices(),
 )
 
-gk.gate0_validate()                    # BugGuard checks
+gk.gate0_validate()                    # BugGuard 14 checks + GK-00 input completeness
 gk.gate1_quick(run_func, quick_params)  # ~20 combos → PF >= 1.05?
 gk.gate2_screen(run_func, full_params)  # ~100 combos → PF >= 1.10, RF >= 1.5?
+gk.gate3_validate(wfa_result, cscv_result)  # WFA OOS win rate + CSCV PBO
+gk.gate4_montecarlo(mc)                     # MC drawdown pass rate >= 70%
 gk.summary()
 
 # Override thresholds for a different asset class
 gk.GATE1_MIN_PF = 1.10
 gk.GATE2_MIN_RF = 2.0
+gk.GATE3_MAX_PBO = 0.30
+gk.GATE4_MIN_MC_PASS = 0.80
 ```
+
+### Gate details
+
+| Gate | Time | What it checks | Kill condition |
+|------|------|---------------|----------------|
+| Gate 0 | 1 min | BugGuard (14 checks) + input completeness | Any BG ERROR → RuntimeError |
+| Gate 1 | 5 min | ~20 param combos on full data | Best PF < 1.05 |
+| Gate 2 | 20 min | ~100 param combos, PF + Recovery Factor | Best PF < 1.10 or RF < 1.5 |
+| Gate 3 | 30 min | WFA out-of-sample win rate + CSCV PBO | OOS win rate < 0.55 or PBO > 0.40 |
+| Gate 4 | 5 min | Monte Carlo DD pass rate + confidence percentile | DD@confidence > dd_limit or pass rate < 0.70 |
+
+Gate 0 also emits a `GK-00 WARN` when key inputs are missing (`source_path`, `spreads_used`, `n_bars`), which causes important BugGuard checks to be silently skipped.
+
+### run_func
 
 `run_func` takes a parameter dict and returns a metric dict:
 
@@ -234,6 +254,59 @@ def run_func(params: dict) -> dict | None:
     or None if no trades.
     """
 ```
+
+### Gate 3: WFA + CSCV
+
+Gate 3 uses results from `WalkForward` and `CSCV` to detect overfitting. CSCV is optional — pass `None` to skip the PBO check.
+
+```python
+from backtest_engine import WalkForward, CSCV
+
+# Run WFA
+wf = WalkForward(n_bars=len(close), is_ratio=0.7, n_splits=5)
+wfa_result = wf.run(param_grid, evaluate_fn)
+
+# Run CSCV
+cscv = CSCV(n_splits=10)
+cscv_result = cscv.run(param_grid, evaluate_fn, n_bars=len(close))
+
+# Feed into GateKeeper
+gk.gate3_validate(wfa_result, cscv_result)
+# → Checks: OOS win rate >= 0.55, PBO <= 0.40
+```
+
+### Gate 4: Monte Carlo DD
+
+Gate 4 validates that the strategy survives randomized trade-order scenarios.
+
+```python
+from backtest_engine import MonteCarloDD
+
+mc = MonteCarloDD(results['pnl_r'], n_sims=10_000, risk_pct=0.01, seed=42)
+mc.run()
+
+gk.gate4_montecarlo(mc, dd_limit=0.20, confidence=95.0)
+# → Checks: DD@95% <= 20% AND fraction of sims with max DD < 20% >= 0.70
+```
+
+## TradeResults metrics
+
+`simulate_trades()` returns a `TradeResults` object (numpy structured array) with convenience properties:
+
+```python
+results = simulate_trades(...)
+
+print(f"PF: {results.profit_factor:.2f}")       # Gross profit / gross loss
+print(f"Win rate: {results.win_rate:.1%}")       # Fraction of winning trades
+print(f"Expectancy: {results.expectancy_r:.3f}R") # Mean PnL per trade
+print(f"Geo mean: {results.geometric_mean_r:.4f}") # Geometric growth rate
+print(f"Sharpe: {results.sharpe_r:.2f}")         # mean / std of pnl_r
+print(f"Sortino: {results.sortino_r:.2f}")       # mean / downside_std
+print(f"Max DD: {results.max_drawdown_r:.1f}R")  # Peak-to-trough in R
+print(f"RF: {results.recovery_factor:.2f}")      # total_r / max_dd_r
+```
+
+All properties handle edge cases (empty results, no losses, no wins) and return plain floats.
 
 ## Monte Carlo & prop firm check
 
@@ -251,6 +324,35 @@ print(f"Optimal risk: {mc.optimal_risk_pct(max_dd=0.15)*100:.2f}%")
 result = mc.prop_firm_check(max_dd_limit=0.04, total_dd_limit=0.08, confidence=95.0)
 print(f"Pass: {result['pass']}, Max DD OK: {result['max_dd_ok']}")
 ```
+
+## StressTest
+
+Stress-test a strategy's robustness beyond simple Monte Carlo shuffling.
+
+```python
+from backtest_engine import StressTest
+
+st = StressTest(results['pnl_r'], n_sims=1000, seed=42)
+
+# Block bootstrap — preserves losing-streak autocorrelation
+bb = st.block_bootstrap(block_size=10)
+print(f"Block bootstrap DD@95%: {bb['dd_95']*100:.1f}%")
+
+# Parameter degradation — what-if scenarios
+degraded = st.degrade(win_rate_delta=-0.05, rr_scale=0.90, cost_add_r=0.02)
+# degraded is a modified pnl array you can feed into MonteCarloDD
+
+# Run all scenarios at once
+report = st.run_all(block_size=10)
+# report["baseline"]           — standard MC shuffle
+# report["block_bootstrap"]    — block bootstrap with autocorrelation
+# report["degraded"]["wr_minus5"]     — win rate -5%
+# report["degraded"]["rr_80pct"]      — reward:risk scaled to 80%
+# report["degraded"]["cost_plus_01r"] — extra 0.1R cost per trade
+# report["degraded"]["combined"]      — all degradations at once
+```
+
+Block bootstrap resamples consecutive blocks of trades instead of individual shuffling. This preserves the natural clustering of losing streaks, giving more realistic worst-case DD estimates.
 
 ## Walk-Forward & CSCV
 
@@ -295,7 +397,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 |--------|---------|-----------------|
 | `BugGuard` | Data period estimation uses FX hours (22 days/mo, 17h/day) | Pass `start_ts`/`end_ts` to `check_data_period()` |
 | `BugGuard` | Fundora cost registry (29 pairs: 28 FX + XAUUSD) | Pass your own `expected_costs` dict |
-| `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
+| `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40, MC pass >= 0.70 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
 | `BrokerCost` | `tradeview_ilc()`, `fundora()` presets | Use the constructor directly with your own spreads |
 
 ## Tests
@@ -304,7 +406,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 python -m pytest tests/ -v
 ```
 
-170+ tests, all passing.
+244 tests, all passing.
 
 ## License
 

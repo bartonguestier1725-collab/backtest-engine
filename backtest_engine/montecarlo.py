@@ -1,4 +1,4 @@
-"""Monte Carlo drawdown analysis, Kelly criterion, and risk sizing."""
+"""Monte Carlo drawdown analysis, Kelly criterion, risk sizing, and stress testing."""
 
 from __future__ import annotations
 
@@ -212,3 +212,223 @@ class MonteCarloDD:
         result = self.prop_firm_check(max_dd_limit=daily_dd_limit, total_dd_limit=total_dd_limit, confidence=confidence)
         result["dd_95"] = result["dd_confidence"]
         return result
+
+
+# ---------------------------------------------------------------------------
+# StressTest — block bootstrap + parameter degradation
+# ---------------------------------------------------------------------------
+
+@numba.njit(cache=True)
+def _block_bootstrap_dd(
+    pnl_r: np.ndarray,
+    n_sims: int,
+    block_size: int,
+    risk_pct: float,
+    seed: int,
+) -> np.ndarray:
+    """Block bootstrap MC: resample blocks to preserve autocorrelation.
+
+    Unlike full shuffle, this keeps consecutive trade sequences together,
+    modelling the reality that losing streaks cluster.
+    """
+    n_trades = len(pnl_r)
+    max_dds = np.empty(n_sims, dtype=np.float64)
+    rng_state = np.uint64(seed)
+
+    n_blocks = (n_trades + block_size - 1) // block_size  # ceiling division
+
+    for sim in range(n_sims):
+        equity = 1.0
+        peak = 1.0
+        max_dd = 0.0
+        count = 0
+
+        for _ in range(n_blocks):
+            # Random block start
+            rng_state = np.uint64(
+                np.uint64(6364136223846793005) * rng_state
+                + np.uint64(1442695040888963407)
+            )
+            start = int(rng_state >> np.uint64(33)) % n_trades
+
+            for j in range(block_size):
+                if count >= n_trades:
+                    break
+                idx = (start + j) % n_trades
+                equity *= (1.0 + risk_pct * pnl_r[idx])
+                count += 1
+                if equity <= 0.0:
+                    max_dd = 1.0
+                    break
+                if equity > peak:
+                    peak = equity
+                dd = (peak - equity) / peak
+                if dd > max_dd:
+                    max_dd = dd
+
+            if max_dd >= 1.0:
+                break
+
+        max_dds[sim] = max_dd
+
+    return max_dds
+
+
+class StressTest:
+    """Stress testing via block bootstrap and parameter degradation.
+
+    Block bootstrap preserves trade autocorrelation (losing streaks cluster),
+    giving more realistic worst-case DD estimates than i.i.d. shuffle.
+
+    Parameter degradation simulates adverse conditions: wider spreads, lower
+    win rate, worse RR — answering "what if the edge partially disappears?"
+
+    Parameters
+    ----------
+    pnl_r : 1-D array of trade results in R-multiples.
+    n_sims : Number of simulations per test.
+    risk_pct : Risk per trade as decimal.
+    seed : Random seed.
+
+    Example
+    -------
+    >>> st = StressTest(results["pnl_r"])
+    >>> report = st.run_all()
+    >>> print(report["block_bootstrap"]["dd_95"])
+    >>> print(report["degraded"]["wr_minus5"]["dd_95"])
+    """
+
+    def __init__(
+        self,
+        pnl_r: np.ndarray,
+        n_sims: int = 10_000,
+        risk_pct: float = 0.01,
+        seed: int = 42,
+    ):
+        self.pnl_r = np.ascontiguousarray(pnl_r, dtype=np.float64)
+        self.n_sims = n_sims
+        self.risk_pct = risk_pct
+        self.seed = seed
+
+    def block_bootstrap(self, block_size: int = 10) -> dict:
+        """Run block bootstrap MC.
+
+        Parameters
+        ----------
+        block_size : Number of consecutive trades per block.
+                     Larger blocks preserve more autocorrelation.
+
+        Returns
+        -------
+        Dict with dd_50, dd_95, dd_99, max_dds array.
+        """
+        if block_size < 1:
+            raise ValueError("block_size must be >= 1")
+        max_dds = _block_bootstrap_dd(
+            self.pnl_r, self.n_sims, block_size, self.risk_pct, self.seed,
+        )
+        return {
+            "max_dds": max_dds,
+            "dd_50": float(np.percentile(max_dds, 50)),
+            "dd_95": float(np.percentile(max_dds, 95)),
+            "dd_99": float(np.percentile(max_dds, 99)),
+            "block_size": block_size,
+        }
+
+    def degrade(
+        self,
+        win_rate_delta: float = 0.0,
+        rr_scale: float = 1.0,
+        cost_add_r: float = 0.0,
+    ) -> np.ndarray:
+        """Create a degraded PnL array simulating adverse conditions.
+
+        Parameters
+        ----------
+        win_rate_delta : Shift in win rate (e.g. -0.05 = 5% fewer wins).
+                         Implemented by flipping the weakest wins to losses.
+        rr_scale : Scale factor for winning trades (e.g. 0.8 = 20% smaller wins).
+        cost_add_r : Additional cost in R to subtract from every trade.
+
+        Returns
+        -------
+        Modified copy of pnl_r.
+        """
+        pnl = self.pnl_r.copy()
+
+        # Apply cost addition first
+        if cost_add_r != 0.0:
+            pnl -= cost_add_r
+
+        # Scale wins
+        if rr_scale != 1.0:
+            wins = pnl > 0
+            pnl[wins] *= rr_scale
+
+        # Flip weakest wins to losses (simulating lower win rate)
+        if win_rate_delta < 0.0:
+            n_wins = int(np.sum(pnl > 0))
+            n_flip = min(n_wins, int(abs(win_rate_delta) * len(pnl)))
+            if n_flip > 0:
+                # Sort win indices by PnL ascending, flip the weakest
+                win_indices = np.where(pnl > 0)[0]
+                win_pnls = pnl[win_indices]
+                sorted_order = np.argsort(win_pnls)
+                for i in range(n_flip):
+                    idx = win_indices[sorted_order[i]]
+                    pnl[idx] = -abs(pnl[idx])
+
+        return pnl
+
+    def run_all(self, block_size: int = 10) -> dict:
+        """Run full stress test suite.
+
+        Returns dict with:
+          - 'baseline': standard shuffle MC
+          - 'block_bootstrap': block bootstrap MC
+          - 'degraded': dict of scenario name → MC results
+            - 'wr_minus5': win rate -5%
+            - 'rr_80pct': wins scaled to 80%
+            - 'cost_plus_01r': extra 0.1R cost per trade
+            - 'combined': all degradations together
+        """
+        # Baseline (standard shuffle)
+        baseline_mc = MonteCarloDD(self.pnl_r, self.n_sims, self.risk_pct, self.seed)
+        baseline_dds = baseline_mc.run()
+        baseline = {
+            "max_dds": baseline_dds,
+            "dd_50": float(np.percentile(baseline_dds, 50)),
+            "dd_95": float(np.percentile(baseline_dds, 95)),
+            "dd_99": float(np.percentile(baseline_dds, 99)),
+        }
+
+        # Block bootstrap
+        bb = self.block_bootstrap(block_size)
+
+        # Degradation scenarios
+        scenarios = {
+            "wr_minus5": {"win_rate_delta": -0.05},
+            "rr_80pct": {"rr_scale": 0.80},
+            "cost_plus_01r": {"cost_add_r": 0.10},
+            "combined": {"win_rate_delta": -0.03, "rr_scale": 0.90, "cost_add_r": 0.05},
+        }
+
+        degraded = {}
+        for name, params in scenarios.items():
+            degraded_pnl = self.degrade(**params)
+            mc = MonteCarloDD(degraded_pnl, self.n_sims, self.risk_pct, self.seed)
+            dds = mc.run()
+            degraded[name] = {
+                "params": params,
+                "max_dds": dds,
+                "dd_50": float(np.percentile(dds, 50)),
+                "dd_95": float(np.percentile(dds, 95)),
+                "dd_99": float(np.percentile(dds, 99)),
+                "expectancy_r": float(np.mean(degraded_pnl)),
+            }
+
+        return {
+            "baseline": baseline,
+            "block_bootstrap": bb,
+            "degraded": degraded,
+        }

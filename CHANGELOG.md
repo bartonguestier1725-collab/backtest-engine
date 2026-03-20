@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.5.0
+
+### New features
+
+- **Gate 3: WFA + CSCV overfitting check** — `GateKeeper.gate3_validate(wfa_result, cscv_result)` checks WFA out-of-sample win rate (>= 0.55) and CSCV Probability of Backtest Overfitting (<= 0.40). CSCV is optional — pass `None` to skip the PBO check.
+- **Gate 4: Monte Carlo DD check** — `GateKeeper.gate4_montecarlo(mc, dd_limit, confidence)` validates that >= 70% of MC simulations survive within the DD limit. Auto-runs MC if not already run.
+- **GK-00 input completeness warning** — `gate0_validate()` now emits a `WARN` when `source_path`, `spreads_used`, or `n_bars` are missing, since this causes important BugGuard checks to be silently skipped.
+- **`StressTest` class** — block bootstrap (preserves losing-streak autocorrelation via `@njit` kernel) and parameter degradation scenarios (win rate delta, RR scaling, cost addition). `run_all()` executes baseline + block bootstrap + 4 degradation scenarios in one call.
+- **`_block_bootstrap_dd()` kernel** — new `@numba.njit` function that resamples consecutive blocks of trades, using the same LCG PRNG pattern as the existing Monte Carlo shuffle.
+- **TradeResults convenience metrics** — 8 new `@property` methods: `profit_factor`, `win_rate`, `expectancy_r`, `geometric_mean_r`, `sharpe_r`, `sortino_r`, `max_drawdown_r`, `recovery_factor`. All handle edge cases (empty results, no losses, no wins) and return plain floats.
+
+### Bug fixes
+
+- **`max_drawdown_r` missed initial drawdown** — cumulative PnL curve started from the first trade, not from 0R. If the first trades were losers, the drawdown from starting equity was invisible. Fixed by prepending 0.0 to the cumulative curve. `recovery_factor` (which depends on `max_drawdown_r`) is also corrected.
+- **`sortino_r` returned `nan` with exactly 1 loss** — `np.std(downside, ddof=1)` on a single-element array produces `nan` (division by zero). Now returns `inf` (positive expectancy) or `0.0` when fewer than 2 losing trades.
+- **`summary()` claimed "Strategy is validated" with partial gates** — running only Gate 0–1 and calling `summary()` printed "All gates passed. Strategy is validated", giving false confidence. Now checks that all 5 gates (0–4) ran before printing "validated". Partial runs show "INCOMPLETE (Gate X, Y not run)".
+- **GK-00 warning not counted in `n_warnings`** — the GK-00 `CheckResult` was created with `passed=True`, but `GuardReport.n_warnings` counts `not passed and severity == "WARN"`. Changed to `passed=False` so the warning is properly counted without affecting gate pass/fail (which only checks ERROR severity).
+- **Gate 4 `passed` ignored `confidence` percentile** — the pass condition only checked the pass rate (fraction of sims with DD < dd_limit), ignoring the DD at the `confidence` percentile entirely. A strategy with DD@95%=30% could pass with dd_limit=20% if 70% of sims were below. Now requires BOTH `dd_conf <= dd_limit` and `pass_rate >= GATE4_MIN_MC_PASS`.
+- **Gate 3 silently skipped PBO when CSCV=None** — passing `cscv_result=None` caused Gate 3 to omit any mention of PBO in its message. Now explicitly reports "CSCV PBO=skipped (not provided)" so the omission is visible in logs and summary output. Additionally, `summary()` now distinguishes "Strategy is validated" from "Strategy is validated (CSCV/PBO not checked)" to prevent false confidence when PBO was not actually tested.
+- **Gate 2 killed perfect strategies (max_dd_r=0)** — Recovery Factor calculation returned 0 when `max_dd_r=0` (zero drawdown), causing `rf < GATE2_MIN_RF` to kill the strategy. Now correctly returns `inf` when `max_dd_r=0` and `total_r > 0`.
+- **Gate 0 log contradiction** — `run_all_checks()` printed "ALL CLEAR (0 warnings)" before GK-00 was appended, producing a numerical mismatch with the Gate 0 footer. GK-00 is now appended to the report *before* `print_report()`, so BugGuard's own output includes the correct warning count.
+- **`StressTest.block_bootstrap(block_size=0)` raised raw `ZeroDivisionError`** — now raises `ValueError("block_size must be >= 1")`.
+- **`summary()` could be fooled by duplicate gate runs** — `len(self.gates) >= 5` could be satisfied by running Gate 0 and Gate 1 three times each. Now uses set-based gate name validation instead of count.
+
+### Other
+
+- GateKeeper `summary()` uses `TOTAL_GATES = 5` class variable for completeness check.
+- `examples/gatekeeper_pipeline.py` — new example demonstrating the full Gate 0–4 pipeline with relaxed thresholds for demo purposes.
+- `examples/example_strategy.py` — updated to use TradeResults metrics and StressTest.
+- README updated with Gate 3/4 documentation, StressTest section, TradeResults metrics section, and gate details table.
+- Test count: 174 → 249.
+
 ## v0.4.0
 
 ### New features

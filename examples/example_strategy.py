@@ -5,8 +5,10 @@ This demonstrates the full workflow:
 2. Compute indicators (SMA)
 3. Generate entry signals
 4. Run simulation with simulate_trades
-5. Analyze results with MonteCarloDD
-6. Validate with Walk-Forward and CSCV
+5. Inspect TradeResults metrics
+6. Analyze results with MonteCarloDD
+7. Stress-test with StressTest (block bootstrap + degradation)
+8. Validate with Walk-Forward
 """
 
 import numpy as np
@@ -14,7 +16,7 @@ import numpy as np
 from backtest_engine import (
     simulate_trades, LONG, SHORT,
     EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_BE,
-    sma, atr, BrokerCost, MonteCarloDD, WalkForward,
+    sma, atr, BrokerCost, MonteCarloDD, StressTest, WalkForward,
 )
 
 
@@ -98,16 +100,18 @@ def main():
     # 7. Quality grade
     print(f"\nQuality Grade: {results.quality.grade}")
 
-    # 8. Analyze results (pnl_r already includes costs)
+    # 8. Analyze results using TradeResults convenience metrics
     pnl = results["pnl_r"]
     print(f"\n--- Trade Results (net of costs) ---")
     print(f"Total trades: {len(pnl)}")
-    print(f"Win rate: {np.mean(pnl > 0) * 100:.1f}%")
-    print(f"Avg PnL: {np.mean(pnl):.3f}R")
-    print(f"Total PnL: {np.sum(pnl):.1f}R")
+    print(f"Profit Factor: {results.profit_factor:.2f}")
+    print(f"Win rate: {results.win_rate:.1%}")
+    print(f"Expectancy: {results.expectancy_r:.3f}R")
+    print(f"Sharpe (R): {results.sharpe_r:.2f}")
+    print(f"Sortino (R): {results.sortino_r:.2f}")
+    print(f"Max Drawdown: {results.max_drawdown_r:.1f}R")
+    print(f"Recovery Factor: {results.recovery_factor:.2f}")
     print(f"Avg cost: {np.mean(results['cost_r']):.4f}R")
-    print(f"Max MFE: {np.max(results['mfe_r']):.2f}R")
-    print(f"Max MAE: {np.min(results['mae_r']):.2f}R")
 
     # Exit type breakdown
     for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout"), (EXIT_BE, "BE")]:
@@ -129,7 +133,17 @@ def main():
     optimal = mc.optimal_risk_pct(max_dd=0.15, target_pct=95.0)
     print(f"Optimal risk% (15% DD @ 95th): {optimal*100:.2f}%")
 
-    # 11. Walk-Forward validation
+    # 11. Stress test (block bootstrap + degradation)
+    st = StressTest(pnl, n_sims=1000, seed=42)
+    report = st.run_all(block_size=10)
+    print(f"\n--- Stress Test ---")
+    print(f"Baseline DD@95%: {report['baseline']['dd_95']*100:.1f}%")
+    print(f"Block bootstrap DD@95%: {report['block_bootstrap']['dd_95']*100:.1f}%")
+    for name, scenario in report["degraded"].items():
+        print(f"  {name}: DD@95%={scenario['dd_95']*100:.1f}%, "
+              f"expectancy={scenario['expectancy_r']:.3f}R")
+
+    # 12. Walk-Forward validation
     def evaluate(params, start, end):
         sig, dirs = find_signals(close[start:end], params["fast"], params["slow"])
         if len(sig) == 0:
@@ -140,10 +154,13 @@ def main():
         valid = sig < (end - start)
         if not np.any(valid):
             return 0.0
+        instruments = ["EURUSD"] * int(np.sum(valid))
+        costs = cost_model.per_trade_cost(instruments, sl_d[valid])
         r = simulate_trades(
             high[start:end], low[start:end], close[start:end],
             sig[valid], dirs[valid], sl_d[valid], tp_d[valid],
             max_hold=100,
+            open_prices=open_price[start:end], entry_costs=costs,
             preflight=False,  # suppress per-iteration warnings
         )
         return float(np.mean(r["pnl_r"])) if len(r) > 0 else 0.0

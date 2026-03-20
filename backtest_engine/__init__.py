@@ -1,6 +1,6 @@
 """Numba-accelerated backtesting engine for trading strategies."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from backtest_engine._types import (
     LONG, SHORT,
@@ -15,7 +15,7 @@ from backtest_engine.indicators import (
     parabolic_sar,
 )
 from backtest_engine.costs import BrokerCost
-from backtest_engine.montecarlo import MonteCarloDD
+from backtest_engine.montecarlo import MonteCarloDD, StressTest
 from backtest_engine.validation import WalkForward, CSCV
 from backtest_engine.utils import load_ohlcv, find_signal_bar, resample_ohlcv
 from backtest_engine.bug_guard import (
@@ -36,7 +36,7 @@ __all__ = [
     "sma", "true_range", "atr", "bollinger_bands", "rci", "expanding_quantile", "map_higher_tf",
     "parabolic_sar",
     "BrokerCost",
-    "MonteCarloDD",
+    "MonteCarloDD", "StressTest",
     "WalkForward", "CSCV",
     "load_ohlcv", "find_signal_bar", "resample_ohlcv",
     "bug_guard", "GateKeeper",

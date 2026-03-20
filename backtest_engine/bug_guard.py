@@ -520,6 +520,7 @@ def run_all_checks(
     signal_spreads: Optional[np.ndarray] = None,
     max_spread: float = 0.0,
     strict: bool = True,
+    _suppress_print: bool = False,
     **kwargs,
 ) -> GuardReport:
     """Run all applicable checks and return a report.
@@ -598,7 +599,8 @@ def run_all_checks(
     if signal_spreads is not None or max_spread > 0.0:
         report.results.append(check_spread_filter(signal_spreads, max_spread))
 
-    report.print_report()
+    if not _suppress_print:
+        report.print_report()
 
     if strict:
         report.assert_passed()
