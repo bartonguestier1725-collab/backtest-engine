@@ -10,6 +10,7 @@ from backtest_engine.bug_guard import (
     check_open_prices_provided,
     check_fixed_cost_usage,
     check_spread_filter,
+    check_effective_no_sl,
     run_all_checks,
     _FUNDORA_COST_PIPS,
     _cost_pips_to_price,
@@ -248,3 +249,95 @@ class TestRunAllChecksBG12BG13Integration:
         assert not bg13[0].passed
         assert bg13[0].severity == "WARN"
         assert "not provided" in bg13[0].message
+
+
+class TestCheckEffectiveNoSl:
+    """BG-14: Detect when SL distances are so large they're effectively disabled."""
+
+    def test_normal_sl_passes(self):
+        """Normal SL relative to price should pass."""
+        sl = np.array([5.0, 6.0, 4.5])  # ~0.25% of price
+        result = check_effective_no_sl(sl, avg_price=2000.0)
+        assert result.passed
+
+    def test_huge_sl_warns(self):
+        """SL > 5% of price should warn."""
+        sl = np.array([200.0, 250.0, 180.0])  # ~10% of price
+        result = check_effective_no_sl(sl, avg_price=2000.0)
+        assert not result.passed
+        assert "EFFECTIVELY NO SL" in result.message
+        assert result.severity == "WARN"
+
+    def test_huge_sl_coarse_bar_extra_warning(self):
+        """SL > 5% on 1h bars should include coarse bar warning."""
+        sl = np.array([200.0])
+        result = check_effective_no_sl(sl, avg_price=2000.0, resolution_minutes=60)
+        assert not result.passed
+        assert "1min bars" in result.message
+
+    def test_huge_sl_fine_bar_no_extra(self):
+        """SL > 5% on 1m bars should NOT include coarse bar warning."""
+        sl = np.array([200.0])
+        result = check_effective_no_sl(sl, avg_price=2000.0, resolution_minutes=1)
+        assert not result.passed
+        assert "1min bars" not in result.message
+
+    def test_empty_trades(self):
+        """Empty sl_distances should pass."""
+        result = check_effective_no_sl(np.array([]), avg_price=2000.0)
+        assert result.passed
+
+    def test_zero_avg_price_skips(self):
+        """avg_price=0 should skip gracefully."""
+        sl = np.array([200.0])
+        result = check_effective_no_sl(sl, avg_price=0.0)
+        assert result.passed  # skipped, not failed
+
+    def test_custom_threshold(self):
+        """Custom threshold should be respected."""
+        sl = np.array([30.0])  # 1.5% of price
+        # Default 5% threshold → pass
+        result = check_effective_no_sl(sl, avg_price=2000.0, threshold=0.05)
+        assert result.passed
+        # Stricter 1% threshold → warn
+        result = check_effective_no_sl(sl, avg_price=2000.0, threshold=0.01)
+        assert not result.passed
+
+
+class TestRunAllChecksBG14Integration:
+    """BG-14 should be called from run_all_checks() when params provided."""
+
+    def test_bg14_called_when_sl_and_avg_price_provided(self):
+        """BG-14 should appear when both sl_distances and avg_price are given."""
+        report = run_all_checks(
+            resolution_minutes=60,
+            sl_distances=np.array([200.0, 250.0]),
+            avg_price=2000.0,
+            strict=False,
+            _suppress_print=True,
+        )
+        bg14 = [r for r in report.results if r.check_id == "BG-14"]
+        assert len(bg14) == 1
+        assert not bg14[0].passed
+
+    def test_bg14_not_called_without_avg_price(self):
+        """BG-14 should NOT appear when avg_price is not given."""
+        report = run_all_checks(
+            resolution_minutes=1,
+            sl_distances=np.array([200.0]),
+            strict=False,
+            _suppress_print=True,
+        )
+        bg14 = [r for r in report.results if r.check_id == "BG-14"]
+        assert len(bg14) == 0
+
+    def test_bg14_not_called_without_sl_distances(self):
+        """BG-14 should NOT appear when sl_distances is not given."""
+        report = run_all_checks(
+            resolution_minutes=1,
+            avg_price=2000.0,
+            strict=False,
+            _suppress_print=True,
+        )
+        bg14 = [r for r in report.results if r.check_id == "BG-14"]
+        assert len(bg14) == 0

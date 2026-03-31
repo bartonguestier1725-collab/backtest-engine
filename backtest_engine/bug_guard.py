@@ -498,6 +498,60 @@ def check_min_trades(
     return CheckResult("BG-06b", True, f"Trade count: {n_trades} (>={min_required})")
 
 
+def check_effective_no_sl(
+    sl_distances: np.ndarray,
+    avg_price: float,
+    threshold: float = 0.05,
+    resolution_minutes: int = 60,
+) -> CheckResult:
+    """BG-14: Warn when SL distances are effectively disabled.
+
+    If median SL distance exceeds ``threshold`` fraction of the average price,
+    the strategy has no meaningful downside protection.  Combined with coarse
+    bars (≥60min), intra-bar MAE is severely underestimated.
+
+    Incident: 2026-04-01 Gold Rollover — SL=None strategy on 1h bars hid
+    true max adverse excursion.  Backtest showed -1,014 pips max DD, but
+    real intra-bar drawdown was unknowable.
+
+    Parameters
+    ----------
+    sl_distances : SL distances in price units for all trades.
+    avg_price : Representative price level (e.g. median of close array).
+    threshold : Fraction of price above which SL is considered "no SL".
+    resolution_minutes : Bar size, used to escalate severity.
+    """
+    if len(sl_distances) == 0:
+        return CheckResult("BG-14", True, "No trades to check")
+
+    if avg_price <= 0:
+        return CheckResult("BG-14", True, "avg_price not provided — skipped", severity="WARN")
+
+    median_sl = float(np.median(sl_distances))
+    sl_pct = median_sl / avg_price
+
+    if sl_pct > threshold:
+        severity = "WARN"
+        extra = ""
+        if resolution_minutes >= 60:
+            extra = (
+                f" Combined with {resolution_minutes}min bars, intra-bar MAE "
+                f"(max adverse excursion) is severely underestimated. "
+                f"Use 1min bars to measure true intra-trade risk."
+            )
+        return CheckResult(
+            "BG-14", False,
+            f"EFFECTIVELY NO SL: Median SL = {median_sl:.2f} "
+            f"({sl_pct:.1%} of price level {avg_price:.2f}). "
+            f"Trades have no meaningful downside protection.{extra}",
+            severity=severity,
+        )
+    return CheckResult(
+        "BG-14", True,
+        f"SL distance = {sl_pct:.1%} of price (within {threshold:.0%} threshold)",
+    )
+
+
 # ── Aggregate runner ───────────────────────────────────────────────────────
 
 def run_all_checks(
@@ -519,6 +573,7 @@ def run_all_checks(
     cost_is_fixed: bool = False,
     signal_spreads: Optional[np.ndarray] = None,
     max_spread: float = 0.0,
+    avg_price: float = 0.0,
     strict: bool = True,
     _suppress_print: bool = False,
     **kwargs,
@@ -546,6 +601,8 @@ def run_all_checks(
     cost_is_fixed : True if scalar cost was used instead of per-trade cost.
     signal_spreads : Spread at signal time for each trade (for BG-13).
     max_spread : Maximum spread allowed in price units (for BG-13). 0 = no check.
+    avg_price : Representative price level for BG-14 no-SL detection
+                (e.g. median of close). 0 = skip check.
     strict : If True, assert_passed() is called (raises on ERROR).
     """
     # Backward compat: accept deprecated broker kwarg
@@ -598,6 +655,12 @@ def run_all_checks(
     # BG-13: Spread filter violations
     if signal_spreads is not None or max_spread > 0.0:
         report.results.append(check_spread_filter(signal_spreads, max_spread))
+
+    # BG-14: Effectively no SL
+    if sl_distances is not None and avg_price > 0:
+        report.results.append(
+            check_effective_no_sl(sl_distances, avg_price, resolution_minutes=resolution_minutes)
+        )
 
     if not _suppress_print:
         report.print_report()

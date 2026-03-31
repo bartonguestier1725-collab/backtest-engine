@@ -24,6 +24,7 @@ from backtest_engine.bug_guard import (
     check_resolution, check_data_period, check_same_bar_reentry,
     check_entry_price_type, check_min_trades,
     check_open_prices_provided, check_fixed_cost_usage, check_spread_filter,
+    check_effective_no_sl,
 )
 from backtest_engine.gatekeeper import GateKeeper
 
@@ -44,4 +45,5 @@ __all__ = [
     "check_resolution", "check_data_period", "check_same_bar_reentry",
     "check_entry_price_type", "check_min_trades",
     "check_open_prices_provided", "check_fixed_cost_usage", "check_spread_filter",
+    "check_effective_no_sl",
 ]

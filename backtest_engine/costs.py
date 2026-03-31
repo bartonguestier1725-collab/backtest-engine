@@ -24,6 +24,24 @@ class BrokerCost:
     pip_values: dict[str, float] = field(default_factory=dict)
     pip_sizes: dict[str, float] = field(default_factory=dict)
 
+    def pip_size(self, instrument: str) -> float:
+        """Return the pip size for an instrument.
+
+        Standard: 0.0001 (EURUSD etc.), 0.01 (JPY pairs, XAUUSD).
+        Falls back to 0.0001 if instrument is unknown.
+        """
+        return self.pip_sizes.get(instrument, 0.0001)
+
+    def price_to_pips(self, instrument: str, price_diff: float) -> float:
+        """Convert a price difference to pips.
+
+        Example: XAUUSD price_diff=2.50 → 250 pips (pip_size=0.01).
+        """
+        ps = self.pip_size(instrument)
+        if ps == 0.0:
+            return 0.0
+        return price_diff / ps
+
     def cost_price(self, instrument: str) -> float:
         """Total round-trip cost in price units for an instrument."""
         spread = self.spreads.get(instrument, 0.0)

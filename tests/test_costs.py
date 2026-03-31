@@ -97,6 +97,43 @@ class TestCostPrices:
         assert bc.cost_prices() == {}
 
 
+class TestPipSize:
+    def test_pip_size_eurusd(self):
+        bc = BrokerCost.tradeview_ilc()
+        assert bc.pip_size("EURUSD") == pytest.approx(0.0001)
+
+    def test_pip_size_usdjpy(self):
+        bc = BrokerCost.tradeview_ilc()
+        assert bc.pip_size("USDJPY") == pytest.approx(0.01)
+
+    def test_pip_size_xauusd(self):
+        bc = BrokerCost.tradeview_ilc()
+        assert bc.pip_size("XAUUSD") == pytest.approx(0.01)
+
+    def test_pip_size_unknown_defaults(self):
+        bc = BrokerCost()
+        assert bc.pip_size("UNKNOWN") == pytest.approx(0.0001)
+
+    def test_price_to_pips_eurusd(self):
+        bc = BrokerCost.tradeview_ilc()
+        # 10 pips = 0.001 price diff
+        assert bc.price_to_pips("EURUSD", 0.001) == pytest.approx(10.0)
+
+    def test_price_to_pips_xauusd(self):
+        bc = BrokerCost.tradeview_ilc()
+        # 250 pips = 2.50 price diff (pip_size=0.01)
+        assert bc.price_to_pips("XAUUSD", 2.50) == pytest.approx(250.0)
+
+    def test_price_to_pips_usdjpy(self):
+        bc = BrokerCost.tradeview_ilc()
+        # 15 pips = 0.15 price diff
+        assert bc.price_to_pips("USDJPY", 0.15) == pytest.approx(15.0)
+
+    def test_price_to_pips_zero_pip_size(self):
+        bc = BrokerCost(pip_sizes={"TEST": 0.0})
+        assert bc.price_to_pips("TEST", 1.0) == 0.0
+
+
 class TestPerTradeCost:
     def test_per_trade_cost_equals_as_r_array(self):
         bc = BrokerCost(spreads={"EURUSD": 0.0001, "GBPUSD": 0.0002})
