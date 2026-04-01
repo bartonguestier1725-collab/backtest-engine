@@ -448,6 +448,23 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 | `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40, MC pass >= 0.70 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
 | `BrokerCost` | `tradeview_ilc()`, `fundora()` presets | Use the constructor directly with your own spreads |
 
+## Known limitations
+
+Things this engine handles, and things it doesn't. Read before trusting any result.
+
+**Handled automatically:**
+- **Look-ahead bias** — BugGuard BG-01 detects signal/entry on same bar. Use `open_prices` for next-bar-open entry.
+- **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without this, 1h-bar simulation overestimates PF by ~40%.
+- **Cost underestimation** — BugGuard BG-02 compares your costs against measured broker spreads. Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
+- **Short-period overfitting** — BugGuard BG-06 warns on <12 months of data. CSCV gives a formal PBO estimate.
+- **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder handles local→UTC conversion.
+
+**NOT handled — your responsibility:**
+- **Backtest-to-live gap** — Backtesting on aggregated multi-source data (e.g. AggVault median) gives cleaner signals than any single broker. A strategy that works on aggregated data may underperform on your broker's feed due to spread differences, requotes, and slippage. Always forward-test on your actual broker before going live.
+- **Variable spreads** — `BrokerCost` uses static measured spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
+- **Swap/rollover costs** — Not modeled. For intraday strategies this is negligible. For multi-day holds, swap can erase thin edges.
+- **Execution latency** — The engine assumes instant fills at bar prices. In live trading, latency causes slippage, especially on fast moves.
+
 ## Tests
 
 ```bash
