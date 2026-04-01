@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades,
-    LONG, SHORT, rsi, atr, BrokerCost,
+    LONG, SHORT, rsi, atr,
     WalkForward, CSCV, MonteCarloDD, StressTest,
     bug_guard,
 )
@@ -31,7 +31,6 @@ print(f"Loaded: {n_bars} bars, {dt_index[0]} → {dt_index[-1]}")
 
 # ── Pre-compute ──────────────────────────────────────────────────────
 atr_vals = atr(highs, lows, closes, 14)
-cost_model = BrokerCost.tradeview_ilc()
 
 
 # ── evaluate_fn: WFA / CSCV が呼ぶ関数 ───────────────────────────────
@@ -70,15 +69,11 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
     directions = np.array(directions, dtype=np.int8)
     sl_distances = atr_vals[signal_bars] * sl_mult
     tp_distances = sl_distances * rr_ratio
-    instruments = ["EURUSD"] * len(signal_bars)
-    entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
-
     res = simulate_trades(
         highs, lows, closes,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=max_hold, exit_mode="rr",
-        open_prices=opens, entry_costs=entry_costs,
-        preflight=False,
+        open_prices=opens, preflight=False,
     )
 
     pnl = res["pnl_r"]
@@ -114,15 +109,12 @@ def run_full(params: dict) -> dict | None:
     directions = np.array(directions, dtype=np.int8)
     sl_distances = atr_vals[signal_bars] * params.get("sl_atr_mult", 2.0)
     tp_distances = sl_distances * params.get("rr_ratio", 2.0)
-    instruments = ["EURUSD"] * len(signal_bars)
-    entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
 
     res = simulate_trades(
         highs, lows, closes,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=params.get("max_hold", 48), exit_mode="rr",
-        open_prices=opens, entry_costs=entry_costs,
-        preflight=False,
+        open_prices=opens, preflight=False,
     )
     return {"pnl_r": res["pnl_r"], "pf": res.profit_factor}
 
@@ -139,8 +131,7 @@ bug_guard(
     n_bars=n_bars,
     bar_minutes=60,
     n_trades=944,  # From Level 2 best
-    spreads_used=cost_model.cost_prices(),
-    expected_costs=cost_model.cost_prices(),
+    # No costs — GROSS edge testing on aggregated data
     source_path=__file__,
     strict=False,
 )

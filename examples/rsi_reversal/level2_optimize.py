@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades,
-    LONG, SHORT, rsi, atr, BrokerCost,
+    LONG, SHORT, rsi, atr,
 )
 
 # ── Step 1: データ取得 ────────────────────────────────────────────────
@@ -49,10 +49,7 @@ print(f"\nGrid: {len(combos)} combinations")
 # ── Pre-compute ATR (period 14 for all — SL scaling only) ────────────
 atr_vals = atr(highs, lows, closes, 14)
 
-# ── Cost model ────────────────────────────────────────────────────────
-cost_model = BrokerCost.tradeview_ilc()
-
-# ── Step 3: Grid search ──────────────────────────────────────────────
+# ── Step 3: Grid search (GROSS — no execution costs) ─────────────────
 results_list = []
 
 for i, combo in enumerate(combos):
@@ -86,18 +83,13 @@ for i, combo in enumerate(combos):
     sl_distances = atr_vals[signal_bars] * params["sl_atr_mult"]
     tp_distances = sl_distances * params["rr_ratio"]
 
-    # Costs
-    instruments = ["EURUSD"] * len(signal_bars)
-    entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
-
-    # Simulate
+    # Simulate (GROSS — no costs)
     res = simulate_trades(
         highs, lows, closes,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=params["max_hold"],
         exit_mode="rr",
         open_prices=opens,
-        entry_costs=entry_costs,
         preflight=False,
     )
 
@@ -172,8 +164,6 @@ signal_bars = np.array(signal_bars, dtype=np.int32)
 directions = np.array(directions, dtype=np.int8)
 sl_distances = atr_vals[signal_bars] * best["sl_atr_mult"]
 tp_distances = sl_distances * best["rr_ratio"]
-instruments = ["EURUSD"] * len(signal_bars)
-entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
 
 best_results = simulate_trades(
     highs, lows, closes,
@@ -181,7 +171,6 @@ best_results = simulate_trades(
     max_hold=int(best["max_hold"]),
     exit_mode="rr",
     open_prices=opens,
-    entry_costs=entry_costs,
 )
 
 pnl = best_results["pnl_r"]
@@ -194,7 +183,7 @@ print(f"Sharpe (R):    {best_results.sharpe_r:.2f}")
 print(f"Sortino (R):   {best_results.sortino_r:.2f}")
 print(f"Max DD:        {best_results.max_drawdown_r:.1f}R")
 print(f"Recovery:      {best_results.recovery_factor:.2f}")
-print(f"Avg cost:      {np.mean(best_results['cost_r']):.4f}R")
+print(f"Cost:          {best_results.cost_label}")
 
 # Yearly breakdown
 entry_bars_arr = best_results["entry_bar"]

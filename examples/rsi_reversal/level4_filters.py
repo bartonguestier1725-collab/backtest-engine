@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades,
-    LONG, SHORT, rsi, sma, atr, BrokerCost,
+    LONG, SHORT, rsi, sma, atr,
     WalkForward, CSCV, MonteCarloDD, StressTest,
 )
 
@@ -37,7 +37,6 @@ print(f"Loaded: {n_bars} bars, {dt_index[0]} → {dt_index[-1]}")
 # ── Pre-compute indicators ──────────────────────────────────────────
 atr_vals = atr(highs, lows, closes, 14)
 sma_200 = sma(closes, 200)  # Trend filter
-cost_model = BrokerCost.tradeview_ilc()
 
 
 def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
@@ -98,15 +97,11 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
     directions = np.array(directions, dtype=np.int8)
     sl_distances = atr_vals[signal_bars] * sl_mult
     tp_distances = sl_distances * rr_ratio
-    instruments = ["EURUSD"] * len(signal_bars)
-    entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
-
     res = simulate_trades(
         highs, lows, closes,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=max_hold, exit_mode="rr",
-        open_prices=opens, entry_costs=entry_costs,
-        preflight=False,
+        open_prices=opens, preflight=False,
     )
 
     pnl = res["pnl_r"]
@@ -150,14 +145,12 @@ def run_detail(params: dict):
     directions = np.array(directions, dtype=np.int8)
     sl_distances = atr_vals[signal_bars] * params["sl_atr_mult"]
     tp_distances = sl_distances * params["rr_ratio"]
-    instruments = ["EURUSD"] * len(signal_bars)
-    entry_costs = cost_model.per_trade_cost(instruments, sl_distances)
 
     return simulate_trades(
         highs, lows, closes,
         signal_bars, directions, sl_distances, tp_distances,
         max_hold=params["max_hold"], exit_mode="rr",
-        open_prices=opens, entry_costs=entry_costs,
+        open_prices=opens,
     ), directions
 
 
