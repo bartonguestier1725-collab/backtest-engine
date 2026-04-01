@@ -40,9 +40,7 @@ uv pip install -e '.[dev]'
 
 ```python
 import numpy as np
-from backtest_engine import (
-    fetch_aggvault, simulate_trades, BrokerCost, LONG, MonteCarloDD, atr,
-)
+from backtest_engine import fetch_aggvault, simulate_trades, LONG, atr
 
 # Fetch EURUSD 1h data from AggVault API (export AGGVAULT_KEY=tk_your_key)
 timestamps, open_, high, low, close, _ = fetch_aggvault(
@@ -58,31 +56,19 @@ directions = np.array([LONG, LONG, LONG], dtype=np.int8)
 sl_distances = atr_vals[signal_bars] * 1.5
 tp_distances = atr_vals[signal_bars] * 3.0
 
-# Per-trade cost (spread + commission, scaled to each trade's SL)
-cost = BrokerCost.tradeview_ilc()
-instruments = ["EURUSD"] * len(signal_bars)
-entry_costs = cost.per_trade_cost(instruments, sl_distances)
-
-# Run simulation (Grade A: both open_prices and entry_costs provided)
+# Run simulation (GROSS — no execution costs)
+# This tests whether the technical edge EXISTS, not whether it's profitable
+# on a specific broker. Add costs later with BrokerCost for broker-specific testing.
 results = simulate_trades(
     high, low, close,
     signal_bars, directions, sl_distances, tp_distances,
     max_hold=100,
-    be_trigger_pct=0.5,
     open_prices=open_,
-    entry_costs=entry_costs,
 )
 
-# Results (pnl_r is already net of costs)
-print(f"Quality: {results.quality.grade}")  # "A"
+# Results (GROSS: before broker-specific costs)
 print(f"Win rate: {np.mean(results['pnl_r'] > 0) * 100:.1f}%")
 print(f"Avg PnL: {np.mean(results['pnl_r']):.3f}R")
-print(f"Avg cost: {np.mean(results['cost_r']):.4f}R")
-
-# Monte Carlo DD analysis
-mc = MonteCarloDD(results['pnl_r'], risk_pct=0.01)
-mc.run()
-print(f"95th DD: {mc.dd_percentile(95) * 100:.1f}%")
 ```
 
 ## Multi-resolution execution

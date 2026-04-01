@@ -49,6 +49,20 @@ class TradeResults(np.ndarray):
         self.quality = state[-1]
         super().__setstate__(state[:-1])
 
+    # ── Cost awareness ────────────────────────────────────────────────
+
+    @property
+    def is_gross(self) -> bool:
+        """True if no execution costs were applied (all cost_r == 0)."""
+        if len(self) == 0:
+            return True
+        return float(np.sum(np.abs(np.asarray(self["cost_r"])))) == 0.0
+
+    @property
+    def cost_label(self) -> str:
+        """'GROSS (no execution costs)' or 'NET (costs applied)'."""
+        return "GROSS (no execution costs)" if self.is_gross else "NET (costs applied)"
+
     # ── Convenience metrics ─────────────────────────────────────────────
 
     @property
