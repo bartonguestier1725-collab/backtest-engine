@@ -1,6 +1,6 @@
 """Numba-accelerated backtesting engine for trading strategies."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from backtest_engine._types import (
     LONG, SHORT,
@@ -18,6 +18,7 @@ from backtest_engine.costs import BrokerCost
 from backtest_engine.montecarlo import MonteCarloDD, StressTest
 from backtest_engine.validation import WalkForward, CSCV
 from backtest_engine.utils import load_ohlcv, find_signal_bar, resample_ohlcv
+from backtest_engine.data import fetch_aggvault
 from backtest_engine.bug_guard import (
     run_all_checks as bug_guard,
     check_look_ahead, check_cost_registry, check_bfill_in_source,
@@ -40,6 +41,7 @@ __all__ = [
     "MonteCarloDD", "StressTest",
     "WalkForward", "CSCV",
     "load_ohlcv", "find_signal_bar", "resample_ohlcv",
+    "fetch_aggvault",
     "bug_guard", "GateKeeper",
     "check_look_ahead", "check_cost_registry", "check_bfill_in_source",
     "check_resolution", "check_data_period", "check_same_bar_reentry",
