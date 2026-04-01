@@ -40,10 +40,14 @@ uv pip install -e '.[dev]'
 
 ```python
 import numpy as np
-from backtest_engine import simulate_trades, BrokerCost, LONG, MonteCarloDD, atr
+from backtest_engine import (
+    fetch_aggvault, simulate_trades, BrokerCost, LONG, MonteCarloDD, atr,
+)
 
-# OHLC data (numpy arrays)
-open_, high, low, close = ...
+# Fetch EURUSD 1h data from AggVault API (export AGGVAULT_KEY=tk_your_key)
+timestamps, open_, high, low, close, _ = fetch_aggvault(
+    "EURUSD", "1h", "2024-01-01", "2025-12-31",
+)
 
 # ATR-based SL/TP
 atr_vals = atr(high, low, close, 14)
@@ -423,7 +427,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 python -m pytest tests/ -v
 ```
 
-318 tests, all passing.
+319 tests, all passing.
 
 ## License
 

@@ -250,9 +250,10 @@ def check_resolution(
     if resolution_minutes >= 60:
         return CheckResult(
             "BG-05", False,
-            f"PHANTOM WINS: Using {resolution_minutes}min bars for SL/TP detection. "
+            f"COARSE BARS: Using {resolution_minutes}min bars for SL/TP detection. "
             f"With SL={sl_atr_mult}×ATR≈{avg_atr_pips*sl_atr_mult:.0f}pip, intra-bar "
-            f"SL/TP hit order is unknowable. Use ≤5min bars for execution simulation.",
+            f"SL/TP hit order is unknowable. Use ≤5min bars for accurate simulation.",
+            severity="WARN",
         )
     if resolution_minutes >= 15:
         return CheckResult(

@@ -81,15 +81,28 @@ class TestGate0:
     def test_gate0_fails_on_bug_guard_error(self, tmp_path):
         """Gate 0 should raise RuntimeError on BugGuard ERROR."""
         src = tmp_path / "bad.py"
-        src.write_text("df.bfill()\n")  # triggers BG-04
+        src.write_text("df.bfill()\n")  # triggers BG-04 ERROR
 
         gk = GateKeeper(
             strategy_name="test",
-            resolution_minutes=60,  # triggers BG-05 ERROR
+            resolution_minutes=5,
             source_path=str(src),
         )
         with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
             gk.gate0_validate()
+
+    def test_gate0_passes_with_warn_only(self, tmp_path):
+        """Gate 0 should PASS when only WARNINGs (no ERRORs) exist."""
+        src = tmp_path / "clean.py"
+        src.write_text("x = 1\n")
+
+        gk = GateKeeper(
+            strategy_name="test",
+            resolution_minutes=60,  # BG-05 WARN (not ERROR)
+            source_path=str(src),
+        )
+        # Should not raise — BG-05 is now WARN, not ERROR
+        gk.gate0_validate()
 
 
 # ── Gate 1 Tests ─────────────────────────────────────────────────────────────
