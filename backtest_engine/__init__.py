@@ -7,7 +7,7 @@ from backtest_engine._types import (
     EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_BE, EXIT_CUSTOM, EXIT_TRAIL, EXIT_NO_FILL,
     TRADE_RESULT_DTYPE,
 )
-from backtest_engine.core import simulate_trades
+from backtest_engine.core import simulate_trades, simulate_trades_hires
 from backtest_engine.preflight import BacktestQualityWarning, PreflightReport
 from backtest_engine._results import TradeResults
 from backtest_engine.indicators import (
@@ -30,7 +30,7 @@ from backtest_engine.bug_guard import (
 from backtest_engine.gatekeeper import GateKeeper
 
 __all__ = [
-    "simulate_trades",
+    "simulate_trades", "simulate_trades_hires",
     "LONG", "SHORT",
     "EXIT_SL", "EXIT_TP", "EXIT_TIME", "EXIT_BE", "EXIT_CUSTOM", "EXIT_TRAIL", "EXIT_NO_FILL",
     "TRADE_RESULT_DTYPE",

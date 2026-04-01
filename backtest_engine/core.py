@@ -989,3 +989,113 @@ def simulate_trades(
         out["cost_r"] = 0.0
 
     return TradeResults(out, quality=quality_report)
+
+
+def simulate_trades_hires(
+    # Signal-timeframe data (e.g. 1h — used only for index mapping)
+    signal_timestamps: np.ndarray,
+    signal_bars: np.ndarray,
+    directions: np.ndarray,
+    sl_distances: np.ndarray,
+    tp_distances: np.ndarray,
+    max_hold: int,
+    signal_bar_minutes: int,
+    # Execution-timeframe data (e.g. 1m — used for actual simulation)
+    exec_timestamps: np.ndarray,
+    exec_opens: np.ndarray,
+    exec_highs: np.ndarray,
+    exec_lows: np.ndarray,
+    exec_closes: np.ndarray,
+    exec_bar_minutes: int = 1,
+    # Pass-through to simulate_trades
+    entry_costs: np.ndarray | None = None,
+    **kwargs,
+) -> TradeResults:
+    """Simulate trades at higher resolution than signal generation.
+
+    Signals are generated on lower-resolution bars (e.g. 1h) but trade
+    execution (SL/TP hit detection) runs on higher-resolution bars (e.g. 1m).
+    This eliminates the intra-bar SL/TP ordering problem (BG-05).
+
+    Parameters
+    ----------
+    signal_timestamps : int64 array of Unix timestamps for the signal timeframe.
+    signal_bars : int32 array of bar indices in the signal timeframe.
+    directions, sl_distances, tp_distances : Same as simulate_trades.
+    max_hold : Max hold in signal-timeframe bars (auto-converted to exec bars).
+    signal_bar_minutes : Bar size of signal timeframe (e.g. 60 for 1h).
+    exec_timestamps : int64 array of Unix timestamps for execution timeframe.
+    exec_opens, exec_highs, exec_lows, exec_closes : Execution-timeframe OHLC.
+    exec_bar_minutes : Bar size of execution timeframe (default 1 for 1m).
+    entry_costs : Per-trade costs (same as simulate_trades).
+    **kwargs : Passed to simulate_trades (exit_mode, be_trigger_pct, etc.).
+
+    Returns
+    -------
+    TradeResults with bar indices in execution timeframe.
+
+    Example
+    -------
+    ::
+
+        # Signal generation on 1h
+        ts_1h, opens_1h, highs_1h, lows_1h, closes_1h, _ = fetch_aggvault(
+            "EURUSD", "1h", "2021-04-01", "2026-03-31",
+        )
+        rsi_vals = rsi(closes_1h, 14)
+        # ... generate signal_bars, directions, sl_distances, tp_distances
+
+        # Execution simulation on 1m
+        ts_1m, opens_1m, highs_1m, lows_1m, closes_1m, _ = fetch_aggvault(
+            "EURUSD", "1m", "2021-04-01", "2026-03-31",
+        )
+
+        results = simulate_trades_hires(
+            signal_timestamps=ts_1h,
+            signal_bars=signal_bars,
+            directions=directions,
+            sl_distances=sl_distances,
+            tp_distances=tp_distances,
+            max_hold=48,
+            signal_bar_minutes=60,
+            exec_timestamps=ts_1m,
+            exec_opens=opens_1m,
+            exec_highs=highs_1m,
+            exec_lows=lows_1m,
+            exec_closes=closes_1m,
+        )
+    """
+    if signal_bar_minutes <= exec_bar_minutes:
+        raise ValueError(
+            f"signal_bar_minutes ({signal_bar_minutes}) must be greater than "
+            f"exec_bar_minutes ({exec_bar_minutes}). "
+            f"Use simulate_trades() directly if resolutions are equal."
+        )
+
+    # Map signal bars from signal TF → exec TF
+    signal_times = signal_timestamps[signal_bars]
+    exec_signal_bars = np.searchsorted(
+        exec_timestamps, signal_times, side="left"
+    ).astype(np.int32)
+
+    # Clamp to valid range
+    n_exec = len(exec_timestamps)
+    exec_signal_bars = np.clip(exec_signal_bars, 0, n_exec - 1)
+
+    # Convert max_hold from signal bars to exec bars
+    ratio = signal_bar_minutes // exec_bar_minutes
+    max_hold_exec = max_hold * ratio
+
+    return simulate_trades(
+        high=exec_highs,
+        low=exec_lows,
+        close=exec_closes,
+        signal_bars=exec_signal_bars,
+        directions=directions,
+        sl_distances=sl_distances,
+        tp_distances=tp_distances,
+        max_hold=max_hold_exec,
+        open_prices=exec_opens,
+        entry_costs=entry_costs,
+        **kwargs,
+    )

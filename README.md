@@ -427,7 +427,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 python -m pytest tests/ -v
 ```
 
-319 tests, all passing.
+325 tests, all passing.
 
 ## License
 
