@@ -11,9 +11,23 @@ import numpy as np
 class BrokerCost:
     """Broker cost model with per-instrument spread and commission data.
 
+    **IMPORTANT — one-way vs round-trip:**
+
+    - ``spreads``: **One-way** bid-ask spread in price units. This is the
+      spread you see on your platform (e.g. EURUSD 0.2 pips = 0.00002).
+      You pay it once on entry. Do NOT double it.
+    - ``commission_per_lot``: **Round-trip** commission per standard lot in
+      account currency (e.g. $5 RT = $2.50 per side). Do NOT halve it.
+    - ``cost_price()``: Returns total cost = spread + commission (all in
+      price units, round-trip equivalent). This is what gets subtracted
+      from each trade's PnL.
+
+    If you get these backwards (doubling spread or halving commission),
+    your cost estimate will be off by ~2x and PF will be wrong.
+
     Attributes
     ----------
-    spreads : dict mapping instrument name → typical spread in price units.
+    spreads : dict mapping instrument name → one-way bid-ask spread in price units.
     commission_per_lot : Round-trip commission per standard lot in account currency.
     pip_values : dict mapping instrument name → pip value per lot in account currency.
     pip_sizes : dict mapping instrument name → pip size (e.g. 0.0001 for EURUSD).
@@ -107,7 +121,10 @@ class BrokerCost:
 
     @classmethod
     def tradeview_ilc(cls) -> BrokerCost:
-        """Tradeview ILC account preset (ECN, $5 RT commission/lot)."""
+        """Tradeview ILC account preset (ECN, $5 RT commission/lot).
+
+        Spreads are one-way bid-ask (measured). Commission is $5 round-trip.
+        """
         spreads = {
             "EURUSD": 0.00002, "GBPUSD": 0.00004, "USDJPY": 0.003,
             "USDCHF": 0.00004, "AUDUSD": 0.00003, "NZDUSD": 0.00004,

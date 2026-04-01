@@ -456,6 +456,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Look-ahead bias** — BugGuard BG-01 detects signal/entry on same bar. Use `open_prices` for next-bar-open entry.
 - **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without this, 1h-bar simulation overestimates PF by ~40%.
 - **Cost underestimation** — BugGuard BG-02 compares your costs against measured broker spreads. Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
+- **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
 - **Short-period overfitting** — BugGuard BG-06 warns on <12 months of data. CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder handles local→UTC conversion.
 
