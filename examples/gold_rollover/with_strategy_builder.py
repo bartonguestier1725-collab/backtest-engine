@@ -9,19 +9,16 @@ Validates:
 
 import numpy as np
 import pandas as pd
+from backtest_engine import fetch_aggvault
 from backtest_engine.strategy_builder import build_time_based_signals
 from backtest_engine.costs import BrokerCost
 from backtest_engine.bug_guard import run_all_checks
 
 # ── Load data ──────────────────────────────────────────────────────────
-df = pd.read_csv("/tmp/xauusd_1h_5year.csv")
-timestamps = df["time"].values.astype(np.int64)
-opens = df["open"].values.astype(np.float64)
-closes = df["close"].values.astype(np.float64)
-highs = df["high"].values.astype(np.float64)
-lows = df["low"].values.astype(np.float64)
-
-print(f"Loaded: {len(df)} bars")
+timestamps, opens, highs, lows, closes, _ = fetch_aggvault(
+    "XAUUSD", "1h", "2021-04-01", "2026-03-31",
+)
+print(f"Loaded: {len(timestamps)} bars")
 
 # ── Strategy Builder ───────────────────────────────────────────────────
 trades, report = build_time_based_signals(

@@ -5,13 +5,18 @@ Question: Does the edge persist beyond the 2024-2025 gold bull market?
 
 import pandas as pd
 import numpy as np
+from backtest_engine import fetch_aggvault
 
 # ── Load data ──────────────────────────────────────────────────────────
-df = pd.read_csv("/tmp/xauusd_1h_5year.csv")
-df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True)
-df = df.set_index("datetime").sort_index()
+timestamps, opens, highs, lows, closes, _ = fetch_aggvault(
+    "XAUUSD", "1h", "2021-04-01", "2026-03-31",
+)
+df = pd.DataFrame({
+    "open": opens, "high": highs, "low": lows, "close": closes,
+}, index=pd.to_datetime(timestamps, unit="s", utc=True))
+df.index.name = "datetime"
 print(f"Loaded: {len(df)} bars, {df.index[0]} → {df.index[-1]}")
-print(f"Price range: ${df['close'].min():.0f} → ${df['close'].max():.0f}")
+print(f"Price range: ${closes.min():.0f} → ${closes.max():.0f}")
 
 # ── Find entry bars: 17:00 UTC on Mon/Tue/Thu (= Tue/Wed/Fri JST) ────
 # Skip Wed UTC (= Thu JST, 3x swap)

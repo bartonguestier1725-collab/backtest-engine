@@ -15,11 +15,16 @@
 import pandas as pd
 import numpy as np
 from datetime import timezone
+from backtest_engine import fetch_aggvault
 
 # ── Load data ──────────────────────────────────────────────────────────
-df = pd.read_csv("/tmp/xauusd_1h_2024_2025.csv")
-df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True)
-df = df.set_index("datetime").sort_index()
+timestamps, opens, highs, lows, closes, _ = fetch_aggvault(
+    "XAUUSD", "1h", "2024-01-01", "2026-01-01",
+)
+df = pd.DataFrame({
+    "open": opens, "high": highs, "low": lows, "close": closes,
+}, index=pd.to_datetime(timestamps, unit="s", utc=True))
+df.index.name = "datetime"
 print(f"Loaded: {len(df)} bars, {df.index[0]} → {df.index[-1]}")
 
 # ── Debug: check Sunday 17:00 bars ────────────────────────────────────

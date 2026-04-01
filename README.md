@@ -11,12 +11,13 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 ### Core (instrument-agnostic)
 
 - **`simulate_trades()`** — SL/TP/trailing/SAR trailing/limit entry/custom exit, all `@njit` kernels. Supports next-bar-open entry via `open_prices` in all modes
-- **Indicators** — SMA, ATR, Bollinger Bands, RCI, Parabolic SAR, expanding quantile, multi-timeframe mapping (all `@njit`)
+- **Indicators** — SMA, ATR, RSI, Bollinger Bands, RCI, Parabolic SAR, expanding quantile, multi-timeframe mapping (all `@njit`)
 - **Monte Carlo DD** — 10,000-shuffle drawdown distribution, Kelly criterion, optimal risk sizing, prop firm DD check
 - **StressTest** — block bootstrap (preserves losing-streak autocorrelation), parameter degradation scenarios (win rate / RR / cost what-if)
 - **Walk-Forward / CSCV** — out-of-sample validation with IS/OOS ratio and Probability of Backtest Overfitting (PBO, Bailey 2015)
 - **TradeResults** — structured array with convenience metrics: profit factor, win rate, expectancy, Sharpe/Sortino, max drawdown, recovery factor
-- **Utilities** — CSV loading, OHLC resampling, higher-TF indicator mapping
+- **Utilities** — CSV loading, AggVault API fetcher, OHLC resampling, higher-TF indicator mapping
+- **Strategy Builder** — time-based entry/exit signal generation with timezone conversion, market-hours filtering, and match reporting
 
 ### Opinionated modules (FX defaults, fully customizable)
 
@@ -371,17 +372,33 @@ cscv_result = cscv.run(param_grid, evaluate_fn, n_bars=len(close))
 print(f"PBO: {cscv_result['pbo']:.1%}")  # < 0.5 = probably not overfit
 ```
 
+## Data loading
+
+Two ways to get OHLC data — both return the same 6-tuple `(timestamps, opens, highs, lows, closes, volume)`:
+
+```python
+from backtest_engine import load_ohlcv, fetch_aggvault
+
+# Option 1: From CSV file
+timestamps, opens, highs, lows, closes, volume = load_ohlcv("data.csv")
+
+# Option 2: From AggVault API (ISO dates, no epoch math)
+#   export AGGVAULT_KEY=tk_your_key
+timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
+    "EURUSD", "1h", "2021-04-01", "2026-03-31",
+)
+```
+
+`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h` timeframes and 14 symbols (major FX pairs + XAUUSD). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
+
 ## Utilities
 
 ```python
-from backtest_engine import load_ohlcv, resample_ohlcv, map_higher_tf
-
-# Load CSV → numpy arrays
-timestamps, open_, high, low, close, volume = load_ohlcv("data.csv")
+from backtest_engine import resample_ohlcv, map_higher_tf
 
 # Resample 5-min to 1-hour
 ts_1h, o_1h, h_1h, l_1h, c_1h, v_1h = resample_ohlcv(
-    timestamps, open_, high, low, close, volume, rule="1h"
+    timestamps, opens, highs, lows, closes, volume, rule="1h"
 )
 
 # Map higher-TF indicator to lower-TF bars (uses last completed bar)
