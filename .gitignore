@@ -8,3 +8,4 @@ build/
 .pytest_cache/
 *.nbi
 *.nbc
+data/

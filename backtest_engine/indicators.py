@@ -51,6 +51,54 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np
 
 
 @numba.njit(cache=True)
+def rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Relative Strength Index (Wilder's smoothing).
+
+    First ``period`` values are NaN. Uses exponential moving average
+    (alpha = 1/period) for gain/loss smoothing, matching the original
+    Wilder definition and most charting platforms.
+    """
+    n = len(close)
+    out = np.empty(n, dtype=np.float64)
+    out[:period] = np.nan
+
+    # Seed: simple average of first `period` gains/losses
+    avg_gain = 0.0
+    avg_loss = 0.0
+    for i in range(1, period + 1):
+        delta = close[i] - close[i - 1]
+        if delta > 0:
+            avg_gain += delta
+        else:
+            avg_loss -= delta  # make positive
+    avg_gain /= period
+    avg_loss /= period
+
+    if avg_loss == 0.0:
+        out[period] = 100.0
+    else:
+        rs = avg_gain / avg_loss
+        out[period] = 100.0 - (100.0 / (1.0 + rs))
+
+    # Wilder smoothing: avg = (prev_avg * (period-1) + current) / period
+    for i in range(period + 1, n):
+        delta = close[i] - close[i - 1]
+        gain = delta if delta > 0 else 0.0
+        loss = -delta if delta < 0 else 0.0
+
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+
+        if avg_loss == 0.0:
+            out[i] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            out[i] = 100.0 - (100.0 / (1.0 + rs))
+
+    return out
+
+
+@numba.njit(cache=True)
 def bollinger_bands(
     close: np.ndarray, period: int, num_std: float = 2.0,
 ) -> tuple:

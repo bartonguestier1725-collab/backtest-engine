@@ -11,7 +11,7 @@ from backtest_engine.core import simulate_trades
 from backtest_engine.preflight import BacktestQualityWarning, PreflightReport
 from backtest_engine._results import TradeResults
 from backtest_engine.indicators import (
-    sma, true_range, atr, bollinger_bands, rci, expanding_quantile, map_higher_tf,
+    sma, true_range, atr, rsi, bollinger_bands, rci, expanding_quantile, map_higher_tf,
     parabolic_sar,
 )
 from backtest_engine.costs import BrokerCost
@@ -34,7 +34,7 @@ __all__ = [
     "EXIT_SL", "EXIT_TP", "EXIT_TIME", "EXIT_BE", "EXIT_CUSTOM", "EXIT_TRAIL", "EXIT_NO_FILL",
     "TRADE_RESULT_DTYPE",
     "BacktestQualityWarning", "PreflightReport", "TradeResults",
-    "sma", "true_range", "atr", "bollinger_bands", "rci", "expanding_quantile", "map_higher_tf",
+    "sma", "true_range", "atr", "rsi", "bollinger_bands", "rci", "expanding_quantile", "map_higher_tf",
     "parabolic_sar",
     "BrokerCost",
     "MonteCarloDD", "StressTest",

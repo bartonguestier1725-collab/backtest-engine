@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from backtest_engine.indicators import (
-    sma, true_range, atr, bollinger_bands, rci, expanding_quantile, map_higher_tf,
+    sma, true_range, atr, rsi, bollinger_bands, rci, expanding_quantile, map_higher_tf,
     parabolic_sar,
 )
 
@@ -272,6 +272,74 @@ class TestParabolicSAR:
         sar, trend, sar_stop = parabolic_sar(high, low)
         np.testing.assert_allclose(sar, ref_sar, atol=1e-10)
         np.testing.assert_array_equal(trend, ref_trend)
+
+
+class TestRSI:
+    def test_basic_range(self):
+        """RSI should be between 0 and 100."""
+        np.random.seed(42)
+        close = np.random.randn(200).cumsum() + 100
+        result = rsi(close, 14)
+        valid = result[~np.isnan(result)]
+        assert np.all(valid >= 0.0)
+        assert np.all(valid <= 100.0)
+
+    def test_nan_count(self):
+        """First `period` values should be NaN."""
+        close = np.arange(1.0, 31.0, dtype=np.float64)
+        result = rsi(close, 14)
+        assert np.sum(np.isnan(result)) == 14
+
+    def test_pure_uptrend(self):
+        """Monotonically increasing prices → RSI near 100."""
+        close = np.arange(1.0, 51.0, dtype=np.float64)
+        result = rsi(close, 14)
+        assert result[-1] > 95.0
+
+    def test_pure_downtrend(self):
+        """Monotonically decreasing prices → RSI near 0."""
+        close = np.arange(50.0, 0.0, -1.0, dtype=np.float64)
+        result = rsi(close, 14)
+        assert result[-1] < 5.0
+
+    def test_matches_pandas_ta(self):
+        """RSI should roughly match a manual Wilder calculation."""
+        np.random.seed(123)
+        close = np.random.randn(300).cumsum() + 100
+        result = rsi(close, 14)
+
+        # Manual Wilder RSI calculation for comparison
+        deltas = np.diff(close)
+        gains = np.where(deltas > 0, deltas, 0.0)
+        losses = np.where(deltas < 0, -deltas, 0.0)
+
+        avg_gain = np.mean(gains[:14])
+        avg_loss = np.mean(losses[:14])
+        manual_rsi = np.empty(len(close), dtype=np.float64)
+        manual_rsi[:14] = np.nan
+        if avg_loss == 0:
+            manual_rsi[14] = 100.0
+        else:
+            manual_rsi[14] = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+        for i in range(15, len(close)):
+            avg_gain = (avg_gain * 13 + gains[i - 1]) / 14
+            avg_loss = (avg_loss * 13 + losses[i - 1]) / 14
+            if avg_loss == 0:
+                manual_rsi[i] = 100.0
+            else:
+                manual_rsi[i] = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+
+        mask = ~np.isnan(manual_rsi)
+        np.testing.assert_allclose(result[mask], manual_rsi[mask], atol=1e-10)
+
+    def test_period_customization(self):
+        """Different periods should give different results."""
+        np.random.seed(42)
+        close = np.random.randn(100).cumsum() + 100
+        rsi_7 = rsi(close, 7)
+        rsi_21 = rsi(close, 21)
+        # Shorter period = more reactive = different values
+        assert not np.allclose(rsi_7[21:], rsi_21[21:])
 
 
 class TestExpandingQuantile:
