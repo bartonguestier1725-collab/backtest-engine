@@ -85,6 +85,33 @@ mc.run()
 print(f"95th DD: {mc.dd_percentile(95) * 100:.1f}%")
 ```
 
+## Multi-resolution execution
+
+`simulate_trades_hires()` generates signals on coarse bars (e.g. 1h) but runs trade simulation on fine bars (e.g. 1m). This eliminates the intra-bar SL/TP ordering problem that inflates results on coarse timeframes.
+
+```python
+from backtest_engine import fetch_aggvault, simulate_trades_hires, rsi, atr, BrokerCost, LONG, SHORT
+
+# Signals on 1h
+ts_1h, o_1h, h_1h, l_1h, c_1h, _ = fetch_aggvault("EURUSD", "1h", "2024-01-01", "2025-01-01")
+rsi_vals = rsi(c_1h, 14)
+atr_vals = atr(h_1h, l_1h, c_1h, 14)
+# ... generate signal_bars, directions, sl_distances, tp_distances
+
+# Execution on 1m (7s fetch, 0.01s simulation)
+ts_1m, o_1m, h_1m, l_1m, c_1m, _ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2025-01-01")
+
+results = simulate_trades_hires(
+    signal_timestamps=ts_1h, signal_bars=signal_bars,
+    directions=directions, sl_distances=sl_distances, tp_distances=tp_distances,
+    max_hold=48, signal_bar_minutes=60,
+    exec_timestamps=ts_1m, exec_opens=o_1m, exec_highs=h_1m,
+    exec_lows=l_1m, exec_closes=c_1m, entry_costs=entry_costs,
+)
+```
+
+**Why this matters:** On EURUSD RSI 30/70 (2024), 1h-only simulation reports PF=0.90 while hires reports PF=0.53. The 1h version overestimates performance by ~41% because it can't determine SL/TP hit order within a bar.
+
 ## simulate_trades options
 
 | Parameter | Description |
