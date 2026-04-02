@@ -32,30 +32,29 @@ class TestRunPreflight:
         assert report.has_entry_costs
         assert report.has_open_prices
 
-    def test_grade_b_costs_only(self):
-        report = run_preflight(open_prices=None, entry_costs=np.array([0.01]))
-        assert report.grade == "B"
-        assert report.has_entry_costs
-        assert not report.has_open_prices
-
-    def test_grade_b_open_only(self):
+    def test_grade_a_open_only_gross(self):
+        """open_prices provided, no costs → Grade A (GROSS is valid)."""
         report = run_preflight(open_prices=np.array([1.0]), entry_costs=None)
-        assert report.grade == "B"
+        assert report.grade == "A"
         assert not report.has_entry_costs
         assert report.has_open_prices
 
-    def test_grade_c_neither(self):
+    def test_grade_b_no_open(self):
+        """No open_prices → Grade B regardless of costs."""
+        report = run_preflight(open_prices=None, entry_costs=np.array([0.01]))
+        assert report.grade == "B"
+
+    def test_grade_b_neither(self):
         report = run_preflight(open_prices=None, entry_costs=None)
-        assert report.grade == "C"
+        assert report.grade == "B"
         assert not report.has_entry_costs
         assert not report.has_open_prices
 
-    def test_format_message_grade_c(self):
+    def test_format_message_grade_b(self):
         report = run_preflight(open_prices=None, entry_costs=None)
         msg = report.format_message()
-        assert "Quality: C" in msg
+        assert "Quality: B" in msg
         assert "NOT PROVIDED" in msg
-        assert "BrokerCost.per_trade_cost" in msg
 
     def test_format_message_grade_a(self):
         report = run_preflight(
@@ -66,9 +65,13 @@ class TestRunPreflight:
         assert "Quality: A" in msg
         assert "NOT PROVIDED" not in msg
 
-    def test_items_count(self):
+    def test_items_count_no_costs(self):
         report = run_preflight(open_prices=None, entry_costs=None)
-        assert len(report.items) == 2
+        assert len(report.items) == 1  # only open_prices
+
+    def test_items_count_with_costs(self):
+        report = run_preflight(open_prices=np.array([1.0]), entry_costs=np.array([0.01]))
+        assert len(report.items) == 2  # open_prices + entry_costs
 
 
 # ── simulate_trades integration ───────────────────────────────────────────────
@@ -87,8 +90,8 @@ def _make_data(n=50):
 
 
 class TestSimulateTradesIntegration:
-    def test_warning_emitted_grade_c(self):
-        """Grade C: no costs, no open_prices → warning."""
+    def test_warning_emitted_grade_b(self):
+        """Grade B: no open_prices → warning."""
         high, low, close, _, sig, dirs, sl, tp = _make_data()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -99,7 +102,7 @@ class TestSimulateTradesIntegration:
                 x for x in w if issubclass(x.category, BacktestQualityWarning)
             ]
             assert len(quality_warnings) == 1
-            assert "Quality: C" in str(quality_warnings[0].message)
+            assert "Quality: B" in str(quality_warnings[0].message)
 
     def test_no_warning_grade_a(self):
         """Grade A: both provided → no warning."""
@@ -145,7 +148,7 @@ class TestSimulateTradesIntegration:
         # quality should be None when preflight is disabled
         assert result.quality is None
 
-    def test_quality_attribute_grade_c(self):
+    def test_quality_attribute_grade_b(self):
         """results.quality.grade should be accessible."""
         high, low, close, _, sig, dirs, sl, tp = _make_data()
         with warnings.catch_warnings():
@@ -154,7 +157,7 @@ class TestSimulateTradesIntegration:
                 high, low, close, sig, dirs, sl, tp, max_hold=50,
             )
         assert result.quality is not None
-        assert result.quality.grade == "C"
+        assert result.quality.grade == "B"
 
     def test_quality_attribute_grade_a(self):
         high, low, close, open_p, sig, dirs, sl, tp = _make_data()

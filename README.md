@@ -120,9 +120,10 @@ results = simulate_trades_hires(
 
 | Grade | Condition | Meaning |
 |-------|-----------|---------|
-| A | `entry_costs` AND `open_prices` both provided | All inputs provided |
-| B | One of the two provided | One input missing |
-| C | Neither provided | No costs + close entry — over-optimistic |
+| A | `open_prices` provided | Next-bar-open entry (realistic) |
+| B | `open_prices` not provided | Signal-bar close entry (optimistic bias) |
+
+`entry_costs` is not part of the grade — GROSS (no costs) is valid when testing edge existence on aggregated data.
 
 Grade indicates whether inputs were provided, not whether they are correct. Use BugGuard (BG-02, BG-12) to validate cost accuracy.
 
@@ -459,7 +460,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 python -m pytest tests/ -v
 ```
 
-325 tests, all passing.
+326 tests, all passing.
 
 ## License
 

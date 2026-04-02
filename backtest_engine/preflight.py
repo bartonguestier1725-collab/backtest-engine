@@ -64,31 +64,30 @@ def run_preflight(
 
     Returns
     -------
-    PreflightReport with grade A (both), B (one), or C (neither).
+    PreflightReport with grade based on open_prices:
+
+    - Grade A: open_prices provided (next-bar-open entry, realistic)
+    - Grade B: open_prices NOT provided (signal-bar close entry, optimistic)
+
+    entry_costs is informational only — GROSS (no costs) is valid when
+    testing edge existence on aggregated data. Costs are applied separately
+    when testing on broker-specific data.
     """
     has_costs = entry_costs is not None
     has_open = open_prices is not None
 
     items: list[tuple[str, bool, str]] = [
         (
-            "entry_costs",
-            has_costs,
-            "costs will be 0 (use BrokerCost.per_trade_cost())",
-        ),
-        (
             "open_prices",
             has_open,
             "entry at signal-bar close (optimistic bias)",
         ),
     ]
+    if has_costs:
+        items.append(("entry_costs", True, ""))
+    # No warning for missing entry_costs — GROSS is a valid default
 
-    n_provided = int(has_costs) + int(has_open)
-    if n_provided == 2:
-        grade = "A"
-    elif n_provided == 1:
-        grade = "B"
-    else:
-        grade = "C"
+    grade = "A" if has_open else "B"
 
     return PreflightReport(
         grade=grade,
