@@ -35,7 +35,7 @@ def main():
     timestamps = np.arange(base, base + 9000 * 3600, 3600, dtype=np.int64)
 
     exit_bars = results["exit_bar"]
-    sort_order = np.argsort(exit_bars)
+    sort_order = np.argsort(exit_bars, kind="stable")
     pnl_sorted = results["pnl_r"][sort_order]
     equity = np.cumsum(pnl_sorted)
     equity_ts = timestamps[exit_bars[sort_order]]
