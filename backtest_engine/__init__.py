@@ -28,6 +28,9 @@ from backtest_engine.bug_guard import (
     check_effective_no_sl,
 )
 from backtest_engine.gatekeeper import GateKeeper
+from backtest_engine.report import (
+    generate_report, ReportConfig, SummaryCell, GateRow, WfaRow, CscvResult, Section,
+)
 
 __all__ = [
     "simulate_trades", "simulate_trades_hires",
@@ -48,4 +51,5 @@ __all__ = [
     "check_entry_price_type", "check_min_trades",
     "check_open_prices_provided", "check_fixed_cost_usage", "check_spread_filter",
     "check_effective_no_sl",
+    "generate_report", "ReportConfig", "SummaryCell", "GateRow", "WfaRow", "CscvResult", "Section",
 ]
