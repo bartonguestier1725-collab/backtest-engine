@@ -9,3 +9,11 @@ build/
 *.nbi
 *.nbc
 data/
+CLAUDE.md
+breakout_backtest.py
+breakout_optimized.py
+breakout_variants.py
+bt_report_draft.py
+vwma_10m_xauusd.py
+vwma_report.py
+examples/report_trio.py
