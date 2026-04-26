@@ -126,6 +126,39 @@ class TestGenerateReport:
         assert 'badge pass">PASS' in html
         assert 'badge fail">FAIL' in html
 
-    def test_no_matplotlib_on_import(self):
-        import sys
-        assert "matplotlib.pyplot" not in sys.modules or True
+    def test_summary_value_escaped(self, tmp_html):
+        cfg = ReportConfig(
+            title="Test",
+            summary=[SummaryCell("X", '<img src=x>', "tip")],
+        )
+        out = generate_report(cfg, tmp_html)
+        html = out.read_text()
+        assert "<img src=x>" not in html
+        assert "&lt;img" in html
+
+    def test_gate_detail_escaped(self, tmp_html):
+        cfg = ReportConfig(
+            title="Test",
+            gates=[GateRow("G", "PASS", '<script>alert(1)</script>')],
+        )
+        html = generate_report(cfg, tmp_html).read_text()
+        assert "<script>" not in html
+
+    def test_timestamps_mismatch_no_crash(self, tmp_html):
+        trades = _make_trades(50)
+        short_ts = np.arange(10, dtype=np.int64)
+        cfg = ReportConfig(
+            title="Mismatch",
+            trades=trades,
+            trade_timestamps=short_ts,
+        )
+        out = generate_report(cfg, tmp_html)
+        html = out.read_text()
+        assert "エントリー月別" not in html
+        assert "PnL Distribution" in html
+
+    def test_dd_chart_large_drawdown(self, tmp_html):
+        equity = np.array([100.0, 50.0, 20.0, 10.0, 5.0])
+        cfg = ReportConfig(title="BigDD", equity_curve=equity)
+        out = generate_report(cfg, tmp_html)
+        assert out.stat().st_size > 0

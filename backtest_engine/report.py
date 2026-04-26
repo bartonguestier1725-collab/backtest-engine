@@ -137,11 +137,13 @@ def _tip(text: str, desc: str) -> str:
 
 
 def _val_cls(color: str) -> str:
-    return f"val {color}" if color else "val"
+    safe = _html.escape(color, quote=True) if color else ""
+    return f"val {safe}" if safe else "val"
 
 
 def _badge(result: str) -> str:
-    return f'<span class="badge {result.lower()}">{result}</span>'
+    r = _html.escape(result.lower(), quote=True)
+    return f'<span class="badge {r}">{_esc(result)}</span>'
 
 
 def _pnl_color(v: float) -> str:
@@ -169,8 +171,10 @@ def equity_chart_b64(
     dd = pk - y
     ax2 = ax.twinx()
     denom = np.where(pk > 0, pk, 1)
-    ax2.fill_between(range(len(dd)), 0, -dd / denom * 100, color="#c00", alpha=0.08)
-    ax2.set_ylim(-25, 0)
+    dd_pct = dd / denom * 100
+    ax2.fill_between(range(len(dd)), 0, -dd_pct, color="#c00", alpha=0.08)
+    max_dd_pct = float(np.max(dd_pct)) if len(dd_pct) > 0 else 25
+    ax2.set_ylim(-max(max_dd_pct * 1.2, 5), 0)
     ax2.set_ylabel("DD%", fontsize=9, color="#999")
 
     ax.set_ylabel(ylabel, fontsize=9)
@@ -315,11 +319,16 @@ def _build_yearly(trades, timestamps: np.ndarray) -> str:
         wr = float(np.mean(arr > 0))
         wins = arr[arr > 0]
         losses = arr[arr < 0]
-        pf = float(np.sum(wins) / abs(np.sum(losses))) if len(losses) > 0 and np.sum(losses) != 0 else 999
+        if len(losses) > 0 and np.sum(losses) != 0:
+            pf_str = f"{float(np.sum(wins) / abs(np.sum(losses))):.2f}"
+        elif len(wins) > 0:
+            pf_str = "∞"
+        else:
+            pf_str = "N/A"
         cls = _pnl_color(total)
         rows.append(
             f'<tr><td>{y}</td><td class="{cls}">{total:+.1f}R</td>'
-            f'<td>{n}</td><td>{wr:.0%}</td><td>{min(pf, 999):.2f}</td></tr>'
+            f'<td>{n}</td><td>{wr:.0%}</td><td>{pf_str}</td></tr>'
         )
     return (
         '<table><thead><tr><th>年</th><th>PnL(R)</th><th>N</th>'
@@ -385,7 +394,7 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
     # --- header + verdict ---
     verdict_html = ""
     if cfg.verdict:
-        v = cfg.verdict.lower()
+        v = _html.escape(cfg.verdict.lower(), quote=True)
         verdict_html = (
             f'<span class="verdict {v}">'
             f'{_tip(cfg.verdict, cfg.verdict_tooltip)}</span>'
@@ -416,7 +425,7 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
             cells.append(
                 f'<div class="summary-cell">'
                 f'<div class="lbl">{_tip(c.label, c.tooltip)}</div>'
-                f'<div class="{_val_cls(c.color)}">{c.value}</div></div>'
+                f'<div class="{_val_cls(c.color)}">{_esc(c.value)}</div></div>'
             )
         parts.append(
             f'<h2>Summary</h2>'
@@ -444,6 +453,10 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         and len(cfg.trades) > 0
     )
     has_ts = cfg.trade_timestamps is not None
+    if has_trades and has_ts:
+        max_eb = int(np.max(np.asarray(cfg.trades["entry_bar"])))
+        if max_eb >= len(cfg.trade_timestamps):
+            has_ts = False
 
     if has_trades:
         pnl = np.asarray(cfg.trades["pnl_r"])
@@ -488,7 +501,7 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
             rows.append(
                 f"<tr><td>{_tip(g.name, g.tooltip)}</td>"
                 f"<td>{_badge(g.result)}</td>"
-                f"<td>{g.detail}</td></tr>"
+                f"<td>{_esc(g.detail)}</td></tr>"
             )
         parts.append(
             f'<h2>{_tip("GateKeeper", "バックテストエンジンの5段階品質検証パイプライン。Gate 0(データ品質) → Gate 1(最低収益性) → Gate 2(パラメータスクリーニング) → Gate 3(過学習検出) → Gate 4(モンテカルロ)。1つでもFAILで不合格。")}</h2>'
@@ -502,8 +515,8 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         for w in cfg.wfa:
             cls = "pos" if w.is_positive else "neg"
             rows.append(
-                f'<tr><td>{w.period}</td><td>{w.is_value}</td>'
-                f'<td class="{cls}" style="font-weight:bold">{w.oos_value}</td></tr>'
+                f'<tr><td>{_esc(w.period)}</td><td>{_esc(w.is_value)}</td>'
+                f'<td class="{cls}" style="font-weight:bold">{_esc(w.oos_value)}</td></tr>'
             )
         parts.append(
             f'<h2>{_tip("Walk-Forward Analysis", "ウォークフォワード分析。過去で最適化したパラメータを未来データに適用して検証。OOSが正ならリアルでも通用する可能性がある。")}</h2>'
@@ -513,7 +526,7 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         if cfg.wfa_summary:
             parts.append(
                 f'<div style="margin-top:4px;color:#666;font-size:11px;">'
-                f'{cfg.wfa_summary}</div>'
+                f'{_esc(cfg.wfa_summary)}</div>'
             )
 
     # --- CSCV ---

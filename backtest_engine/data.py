@@ -129,6 +129,10 @@ def fetch_aggvault(
                 raise RuntimeError(
                     f"Invalid text encoding in AggVault API response: {ue}"
                 ) from ue
+            except (OSError, ConnectionError) as re:
+                raise RuntimeError(
+                    f"Connection lost while reading AggVault API response: {re}"
+                ) from re
     except urllib.error.HTTPError as e:
         body = ""
         try:
@@ -171,19 +175,24 @@ def fetch_aggvault(
         )
 
     _required = {"time", "open", "high", "low", "close"}
-    first = data[0]
-    if not isinstance(first, dict) or not _required.issubset(first):
-        missing = _required - set(first) if isinstance(first, dict) else _required
-        raise RuntimeError(
-            f"Invalid bar format from AggVault API. Missing keys: {missing}. "
-            f"First bar: {first!r}"
-        )
+    for idx, bar in enumerate(data):
+        if not isinstance(bar, dict) or not _required.issubset(bar):
+            missing = _required - set(bar) if isinstance(bar, dict) else _required
+            raise RuntimeError(
+                f"Invalid bar format at index {idx}. Missing keys: {missing}. "
+                f"Bar: {bar!r}"
+            )
 
-    times = np.array([bar["time"] for bar in data], dtype=np.int64)
-    opens = np.array([bar["open"] for bar in data], dtype=np.float64)
-    highs = np.array([bar["high"] for bar in data], dtype=np.float64)
-    lows = np.array([bar["low"] for bar in data], dtype=np.float64)
-    closes = np.array([bar["close"] for bar in data], dtype=np.float64)
+    try:
+        times = np.array([bar["time"] for bar in data], dtype=np.int64)
+        opens = np.array([bar["open"] for bar in data], dtype=np.float64)
+        highs = np.array([bar["high"] for bar in data], dtype=np.float64)
+        lows = np.array([bar["low"] for bar in data], dtype=np.float64)
+        closes = np.array([bar["close"] for bar in data], dtype=np.float64)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"Failed to convert bar data to numpy arrays: {e}"
+        ) from e
     volume = np.zeros(len(data), dtype=np.float64)
 
     return times, opens, highs, lows, closes, volume
