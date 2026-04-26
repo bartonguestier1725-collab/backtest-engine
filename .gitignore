@@ -9,7 +9,6 @@ build/
 *.nbi
 *.nbc
 data/
-CLAUDE.md
 breakout_backtest.py
 breakout_optimized.py
 breakout_variants.py
