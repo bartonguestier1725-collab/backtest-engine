@@ -407,7 +407,34 @@ timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
 )
 ```
 
-`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h` timeframes and 14 symbols (major FX pairs + XAUUSD). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
+`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
+
+## HTML Report Generation
+
+Generate publication-ready HTML reports from `TradeResults`. Auto-generates PnL distribution, monthly/yearly breakdown, exit analysis, and GateKeeper results.
+
+```python
+from backtest_engine import generate_report, ReportConfig, SummaryCell, GateRow
+
+cfg = ReportConfig(
+    title="RSI Reversal — EURUSD",
+    subtitle="RSI(14) 30/70 | 1H | 2021-2026 | GROSS",
+    verdict="PASS",
+    equity_curve=np.cumsum(results["pnl_r"]),
+    equity_timestamps=timestamps[results["entry_bar"]],
+    summary=[
+        SummaryCell("Trades", str(len(results)), "総トレード数。"),
+        SummaryCell("PF", f"{results.profit_factor:.2f}", "プロフィットファクター。"),
+    ],
+    strategy_html="<b>Entry:</b> RSI < 30 → Long ...",
+    trades=results,              # TradeResults → auto sections
+    trade_timestamps=timestamps,
+    gates=[GateRow("BugGuard", "PASS", "14/14 checks")],
+)
+generate_report(cfg, "report.html")
+```
+
+Auto-generated sections (when `trades` is provided): PnL Distribution histogram, entry-month returns, exit breakdown with hold duration, entry-year P&L. Optional: WFA table (`wfa=`), CSCV overfitting detection (`cscv=`), free-form sections (`sections=`).
 
 ## Utilities
 
