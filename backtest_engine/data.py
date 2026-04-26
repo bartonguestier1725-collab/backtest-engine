@@ -58,7 +58,7 @@ def fetch_aggvault(
         Currency pair (e.g. ``"EURUSD"``, ``"XAUUSD"``).
         Case-insensitive, slashes optional (``"EUR/USD"`` also works).
     timeframe : str
-        Bar size. One of ``"1m"``, ``"5m"``, ``"15m"``, ``"1h"``.
+        Bar size. One of ``"1m"``, ``"5m"``, ``"15m"``, ``"1h"``, ``"4h"``, ``"1d"``.
     start : str
         Start date inclusive, ISO format ``"YYYY-MM-DD"``.
     end : str
@@ -91,22 +91,28 @@ def fetch_aggvault(
             "  Option 2: export AGGVAULT_KEY=tk_your_key"
         )
 
-    valid_tf = {"1m", "5m", "15m", "1h"}
+    valid_tf = {"1m", "5m", "15m", "1h", "4h", "1d"}
     if timeframe not in valid_tf:
         raise ValueError(
             f"Invalid timeframe: {timeframe!r}. Must be one of {sorted(valid_tf)}."
         )
 
     from_epoch = _iso_to_epoch(start, "start")
-    to_epoch = _iso_to_epoch(end, "end")
+    to_epoch = _iso_to_epoch(end, "end") + 86400 - 1  # end日の23:59:59まで含む
 
-    if from_epoch >= to_epoch:
+    if from_epoch > to_epoch:
         raise ValueError(
-            f"start ({start}) must be before end ({end})."
+            f"start ({start}) must be on or before end ({end})."
         )
 
+    import re
+    symbol_norm = symbol.upper().replace("/", "").strip()
+    if not re.fullmatch(r"[A-Z0-9]+", symbol_norm):
+        raise ValueError(
+            f"Invalid symbol: {symbol!r}. Expected letters/digits only (e.g. 'EURUSD')."
+        )
     url = (
-        f"{base_url}/api/v1/historical/{symbol}"
+        f"{base_url}/api/v1/historical/{symbol_norm}"
         f"?tf={timeframe}&from={from_epoch}&to={to_epoch}"
     )
 
@@ -117,7 +123,12 @@ def fetch_aggvault(
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            raw = resp.read().decode()
+            try:
+                raw = resp.read().decode("utf-8")
+            except UnicodeDecodeError as ue:
+                raise RuntimeError(
+                    f"Invalid text encoding in AggVault API response: {ue}"
+                ) from ue
     except urllib.error.HTTPError as e:
         body = ""
         try:
@@ -139,12 +150,33 @@ def fetch_aggvault(
             f"Cannot reach AggVault API at {base_url}: {e.reason}"
         ) from e
 
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"Invalid JSON response from AggVault API: {e}. "
+            f"Response preview: {raw[:200]!r}"
+        ) from e
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Unexpected AggVault response type: {type(data).__name__}. "
+            f"Response preview: {raw[:200]!r}"
+        )
 
     if not data:
         raise RuntimeError(
             f"No bars returned for {symbol}/{timeframe} ({start} → {end}). "
             f"Check symbol name and date range."
+        )
+
+    _required = {"time", "open", "high", "low", "close"}
+    first = data[0]
+    if not isinstance(first, dict) or not _required.issubset(first):
+        missing = _required - set(first) if isinstance(first, dict) else _required
+        raise RuntimeError(
+            f"Invalid bar format from AggVault API. Missing keys: {missing}. "
+            f"First bar: {first!r}"
         )
 
     times = np.array([bar["time"] for bar in data], dtype=np.int64)
