@@ -34,7 +34,11 @@ def main():
     base = int(datetime.datetime(2022, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
     timestamps = np.arange(base, base + 9000 * 3600, 3600, dtype=np.int64)
 
-    equity = np.cumsum(results["pnl_r"])
+    exit_bars = results["exit_bar"]
+    sort_order = np.argsort(exit_bars)
+    pnl_sorted = results["pnl_r"][sort_order]
+    equity = np.cumsum(pnl_sorted)
+    equity_ts = timestamps[exit_bars[sort_order]]
 
     cfg = ReportConfig(
         title="Demo Strategy Report",
@@ -43,7 +47,7 @@ def main():
         verdict="PASS",
         verdict_tooltip=f"PF={results.profit_factor:.2f}",
         equity_curve=equity,
-        equity_timestamps=timestamps[results["exit_bar"]],
+        equity_timestamps=equity_ts,
         equity_ylabel="Cumulative PnL (R)",
         summary=[
             SummaryCell("Trades", str(len(results)), "Total trades."),
