@@ -3,9 +3,10 @@
 How well do the checks in `backtest_engine.audit` find look-ahead bias? 28 small strategy files with known answers: 16 with a planted leak, 12 without. File names (`s01.py` …) and code carry no hint; the answers are in `labels.json`.
 
 ```bash
-uv run python bench/run_bench.py      # all checks on all cases (~20 s), writes results.json
+uv run python bench/run_bench.py      # all checks on all cases (~1 min), writes results.json
 uv run python bench/robustness.py     # other seeds, and real EURUSD 1h if AGGVAULT_KEY is set
-uv run python bench/false_alarms.py   # null_edge on the clean cases, 10 seeds each
+uv run python bench/false_alarms.py   # null_edge on the clean cases, 30 seeds each (~7 min)
+uv run python bench/weak_leaks.py     # null_edge against a leak in only some trades
 uv run python bench/score_llm.py      # scores the saved LLM answers in llm/
 ```
 
@@ -25,7 +26,7 @@ What each check missed, and why:
 
 - `lookahead` cannot see leaks in `backtest()` (an entry one bar early, an exit that uses the next bar, a target computed from later highs) or in library code, since it only re-runs `signals()`: s03, s07, s08, s24.
 - `null_edge` misses leaks that do not create an edge on random data or tilt the directions: a full-sample z-score, a full-sample volatility quantile, a backward fill, and a threshold computed from a window that includes later bars (s05, s11, s20, s22). These still distort a real backtest.
-- The LLM caught every leak that is visible in the strategy file, including the one in s05. It missed s24, whose strategy file is correct and whose leak is inside an imported helper (`cases/hires_lib.py`, a copy of `simulate_trades_hires` before v0.6.0, which entered 59 minutes early). `null_edge` finds it without reading any code: −0.20R per trade before costs on random walks (t = −6.0), against −0.002R for the same trades with coin-flip directions; the fixed engine (s25) gives +0.02R (t = 0.5).
+- The LLM caught every leak that is visible in the strategy file, including the one in s05. It missed s24, whose strategy file is correct and whose leak is inside an imported helper (`cases/hires_lib.py`, a copy of `simulate_trades_hires` before v0.6.0, which entered 59 minutes early). `null_edge` finds it without reading any code: −0.21R per trade before costs on random walks (t = −12.2), against +0.009R for the same entries with coin-flip directions; the fixed engine (s25) gives −0.002R (t = −0.1).
 - The LLM's false alarm is s28 (clean): its JSON said `true` while its own reason said no look-ahead was found.
 
 Conditions of the LLM comparison, which matter for reading it:
@@ -35,7 +36,17 @@ Conditions of the LLM comparison, which matter for reading it:
 - The prompt says custom exits fill at the close of the exit-signal bar; that was the engine's behavior when the first 25 answers were collected (it fills at the next open since v0.6.0). Only s03 uses custom exits; the LLM flagged it. s26–s28 were added later and asked with the same prompt.
 - For s21 the reply first gave a false alarm, then corrected itself; the last JSON object in each reply is scored (`score_llm.py`).
 
-False alarms of `null_edge` (`false_alarms.json`): with the defaults (30 paths, |t| > 3.5) it flagged none of 360 runs (each of the 12 clean cases at 30 seeds). Different seeds share no random path, so a chance failure does not repeat with `--seed`, while each of the 12 leaky cases that `null_edge` catches failed at 3 more seeds, except s16 (2 of 3) (`robustness.json`).
+False alarms of `null_edge` (`false_alarms.json`), with the defaults (120 paths, |t| > 3.5): 3 of 360 runs (each of the 12 clean cases at 30 seeds) failed, all three at the same seed (1004). At a given seed every case runs on the same 120 random walks; those happened to revert slightly more than usual, which favoured the mean-reversion case (s28, t = +3.9 against its placebo) and penalized two trend-following ones (s09, s18). No single path drove it (the largest one contributed 6% of the variance). Different seeds share no path, so a clean strategy almost never fails twice.
+
+Weak leaks (`weak_leaks.json`): an RSI strategy where a fraction of the trades enters one bar early (at the open of its signal bar), 20 seeds each:
+
+| Trades entering early | 30 paths | 120 paths (default) |
+|---|---|---|
+| 0% (clean) | 0/20 fail | 0/20 fail |
+| 20% | 4/20 fail | 18/20 fail |
+| 50% | 20/20 fail | 20/20 fail |
+
+Each of the 12 leaky cases that `null_edge` catches also failed at 3 more seeds (`robustness.json`).
 
 Robustness (`robustness.json`): on real EURUSD 1h data (2024) instead of a random walk, the `lookahead` verdicts are the same for every case (no false alarm on the 11 clean cases that have `signals`). Over 5 other seeds, every signal-level leak failed 5/5 times except s05, whose leak only affects bars 500–749 (4/5).
 
@@ -50,5 +61,5 @@ Robustness (`robustness.json`): on real EURUSD 1h data (2024) instead of a rando
 
 - `cases/sNN.py` — strategies (`signals(data)` and `backtest(data)`); `cases/hires_lib.py` is the helper imported by s24.
 - `labels.json` — answers: leak or not, the kind of leak, and where it sits (signal, execution, library).
-- `results.json`, `robustness.json`, `false_alarms.json` — per-case verdicts from the runs above.
+- `results.json`, `robustness.json`, `false_alarms.json`, `weak_leaks.json` — verdicts from the runs above.
 - `llm/prompt.txt`, `llm/*.sonnet.json`, `llm/summary.json` — the LLM prompt, raw answers and scores.

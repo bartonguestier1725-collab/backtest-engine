@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import warnings
 
 import numpy as np
@@ -16,11 +17,12 @@ from backtest_engine.preflight import run_preflight, BacktestQualityWarning
 from backtest_engine._results import TradeResults
 
 
-# Internal hook for backtest_engine.audit's placebo. When set, a callable
-# ``n -> int8 array of +1/-1`` that multiplies the directions passed to
-# simulate_trades (and so simulate_trades_hires); SL/TP distances are left
-# as they are. Not part of the public API.
-_DIRECTION_FLIP = None
+# Internal hook for backtest_engine.audit's placebo, per thread. When
+# ``_DIRECTION_FLIP.rng`` is a numpy Generator, simulate_trades (and so
+# simulate_trades_hires) multiplies the directions by random +1/-1 drawn
+# from it; SL/TP distances are left as they are. Other threads are never
+# affected. Not part of the public API.
+_DIRECTION_FLIP = threading.local()
 
 
 class DataQualityWarning(UserWarning):
@@ -958,8 +960,10 @@ def simulate_trades(
     close = np.ascontiguousarray(close, dtype=np.float64)
     signal_bars = np.ascontiguousarray(signal_bars, dtype=np.int32)
     directions = np.ascontiguousarray(directions, dtype=np.int8)
-    if _DIRECTION_FLIP is not None and len(directions):
-        directions = np.ascontiguousarray(directions * _DIRECTION_FLIP(len(directions)), dtype=np.int8)
+    _flip_rng = getattr(_DIRECTION_FLIP, "rng", None)
+    if _flip_rng is not None and len(directions):
+        flips = _flip_rng.choice(np.array([-1, 1], dtype=np.int8), len(directions))
+        directions = np.ascontiguousarray(directions * flips, dtype=np.int8)
     sl_distances = np.ascontiguousarray(sl_distances, dtype=np.float64)
     tp_distances = np.ascontiguousarray(tp_distances, dtype=np.float64)
 

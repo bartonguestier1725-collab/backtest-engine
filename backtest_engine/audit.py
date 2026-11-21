@@ -349,22 +349,22 @@ def _cluster_t(tot: np.ndarray, cnt: np.ndarray) -> tuple[float, float]:
 
 @contextmanager
 def _coin_flip_directions(seed_seq):
-    """While active, simulate_trades multiplies the trade directions by random
-    +1/-1 and keeps the SL/TP distances: the same trades with coin-flip
-    directions."""
+    """While active (in this thread only), simulate_trades multiplies the
+    trade directions by random +1/-1 and keeps the SL/TP distances: the same
+    entries with coin-flip directions."""
     from backtest_engine import core
-    rng = np.random.default_rng(seed_seq)
-    prev = core._DIRECTION_FLIP
-    core._DIRECTION_FLIP = lambda n: rng.choice(np.array([-1, 1], dtype=np.int8), n)
+    state = core._DIRECTION_FLIP
+    prev = getattr(state, "rng", None)
+    state.rng = np.random.default_rng(seed_seq)
     try:
         yield
     finally:
-        core._DIRECTION_FLIP = prev
+        state.rng = prev
 
 
 def check_null_edge(
     backtest_fn: Callable[[dict], Any],
-    n_paths: int = 30,
+    n_paths: int = 120,
     n_bars: int = 5000,
     bar_minutes: int = 60,
     vol: float = 0.002,
@@ -381,18 +381,20 @@ def check_null_edge(
                   ``pnl_r`` field, or a plain array of per-trade R). Runs the
                   whole pipeline: signals, simulate_trades, costs. Costs are
                   added back (``cost_r``) before testing.
-    n_paths : Independent random walks (at least 10). Paths come from
-              ``SeedSequence([seed, k])``, so different seeds share no path.
-              The t-statistics treat each path as a cluster of trades.
+    n_paths : Independent random walks (at least 10). Paths are spawned from
+              ``SeedSequence(seed)``, so different seeds share no path. The
+              t-statistics treat each path as a cluster of trades. 120 paths
+              catch weak leaks (a fraction of trades affected) that 30 miss.
     placebo : Also run the backtest with the direction of every trade passed
               to ``simulate_trades`` / ``simulate_trades_hires`` replaced by a
-              coin flip (SL/TP distances unchanged): the same trades with
-              random directions. On a driftless walk this keeps every
-              fill-rule bias (SL-first) and removes any information in the
-              directions. It has no effect if the backtest does not call the
-              engine's simulators; then it is dropped (``details``).
-    t_threshold : |t| above which a result is flagged. 3.5 with 30 paths
-                  flags about 0.5% of runs of a clean strategy (bench).
+              coin flip (SL/TP distances unchanged): the same entries with
+              random directions, under the same exit rules. On a driftless
+              walk this keeps every fill-rule bias (SL-first) and removes any
+              information in the directions. Only calls in the auditing
+              thread are flipped; if the results do not change, the placebo
+              is dropped (``details``).
+    t_threshold : |t| above which a result is flagged (see bench/README.md
+                  for measured false-alarm rates).
 
     Verdicts
     --------
@@ -406,11 +408,13 @@ def check_null_edge(
     """
     if n_paths < _MIN_PATHS:
         return AuditResult("null_edge", "error", f"n_paths must be >= {_MIN_PATHS}")
-    tot, cnt, ptot, all_pnl = [], [], [], []
+    tot, cnt, ptot, pcnt, all_pnl = [], [], [], [], []
     same_as_real = True
     t0 = time.time()
+    path_seeds = np.random.SeedSequence(seed).spawn(n_paths)
     for k in range(n_paths):
-        d = random_walk_bars(n_bars, bar_minutes, vol, seed=np.random.SeedSequence([seed, k]))
+        path_seq, *flip_seqs = path_seeds[k].spawn(1 + n_placebo)
+        d = random_walk_bars(n_bars, bar_minutes, vol, seed=path_seq)
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -418,7 +422,7 @@ def check_null_edge(
                 pl = []
                 if placebo:
                     for j in range(n_placebo):
-                        with _coin_flip_directions(np.random.SeedSequence([seed, k, 1 + j])):
+                        with _coin_flip_directions(flip_seqs[j]):
                             pl.append(_gross_pnl(backtest_fn({kk: v.copy() for kk, v in d.items()})))
         except Exception as e:
             return AuditResult("null_edge", "error", f"backtest function raised {type(e).__name__}: {e}")
@@ -427,6 +431,7 @@ def check_null_edge(
         all_pnl.append(pnl)
         if placebo:
             ptot.append(float(np.mean([x.sum() for x in pl])))
+            pcnt.append(float(np.mean([len(x) for x in pl])))
             if any(len(x) != len(pnl) or not np.allclose(x, pnl, rtol=0, atol=1e-12) for x in pl):
                 same_as_real = False
     tot, cnt = np.array(tot), np.array(cnt)
@@ -446,14 +451,14 @@ def check_null_edge(
     }
     t_diff = t_plc = None
     if placebo and same_as_real:
-        details["placebo"] = ("no effect: the backtest does not pass its trades through "
-                              "backtest_engine's simulate_trades, so it was dropped")
+        details["placebo"] = ("no effect, dropped: simulate_trades was not called in the "
+                              "auditing thread, or the results do not depend on direction")
     elif placebo:
-        ptot = np.array(ptot)
-        plc_mean, t_plc = _cluster_t(ptot, cnt)
+        ptot, pcnt = np.array(ptot), np.array(pcnt)
+        plc_mean, t_plc = _cluster_t(ptot, pcnt)
         _, t_diff = _cluster_t(tot - ptot, cnt)
         details.update({
-            "placebo": "same trades, coin-flip directions",
+            "placebo": "same entries, coin-flip directions",
             "placebo_mean_r_per_trade": round(plc_mean, 4),
             "t_placebo": round(t_plc, 2),
             "t_vs_placebo": round(t_diff, 2),
@@ -470,7 +475,7 @@ def check_null_edge(
         return AuditResult(
             "null_edge", "fail",
             f"DIFFERS FROM RANDOM DIRECTIONS: {mean:+.3f}R per trade against "
-            f"{details['placebo_mean_r_per_trade']:+.3f}R for the same trades with coin-flip "
+            f"{details['placebo_mean_r_per_trade']:+.3f}R for the same entries with coin-flip "
             f"directions (t={t_diff:.1f}). On random data the direction cannot carry "
             f"information about later prices, so the signals use the future or are "
             f"misaligned in time (e.g. entering at the open of the bar whose close produced "
@@ -480,9 +485,11 @@ def check_null_edge(
             return AuditResult(
                 "null_edge", "warn",
                 f"LOSS ON RANDOM DATA from the fill rules: {mean:+.3f}R per trade (t={t_raw:.1f}), "
-                f"the same as with coin-flip directions. Bars often touch both SL and TP, and "
-                f"the SL-first rule makes this backtest pessimistic. Re-run with "
-                f"simulate_trades_hires (1m fills) before trusting the result.", details)
+                f"about the same as with coin-flip directions. Usually bars often touch both SL "
+                f"and TP, and the SL-first rule makes this backtest pessimistic: re-run with "
+                f"simulate_trades_hires (1m fills) before trusting the result. (Only costs "
+                f"passed as entry_costs are added back; costs subtracted from pnl_r by hand "
+                f"also show up as this loss.)", details)
         return AuditResult(
             "null_edge", "fail",
             f"LOSS ON RANDOM DATA: {mean:+.3f}R per trade before costs (t={t_raw:.1f}) on "
@@ -490,7 +497,7 @@ def check_null_edge(
             f"before the bar whose close produced the signal), or the SL-first rule biases "
             f"this backtest (bars often touch both SL and TP; then re-run with "
             f"simulate_trades_hires)." + (
-                f" The same trades with coin-flip directions do not lose "
+                f" The same entries with coin-flip directions lose clearly less "
                 f"({details['placebo_mean_r_per_trade']:+.3f}R), so the fill rules do not explain it."
                 if t_plc is not None else
                 " The coin-flip comparison that tells them apart needs the backtest to use "
@@ -547,14 +554,16 @@ def _strategy_module(path: Path):
         except ValueError:
             pass
         for mod_name in set(sys.modules) - before:
+            top = mod_name.split(".")[0]
+            local = (folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()
             f = getattr(sys.modules.get(mod_name), "__file__", None)
-            if mod_name == name or (f and _under(f, folder)):
+            if mod_name == name or (local and f and _under(f, folder)):
                 sys.modules.pop(mod_name, None)
         for mod_name, m in set_aside.items():
             sys.modules.setdefault(mod_name, m)
 
 
-def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 30,
+def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 120,
                    seed: int = 0, rtol: float = 1e-9) -> dict:
     """Run every applicable test on a strategy file.
 
@@ -613,7 +622,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--json", action="store_true", help="print machine-readable JSON")
     ap.add_argument("--csv", help="OHLC(V) CSV for the look-ahead test (default: random walk)")
     ap.add_argument("--cuts", type=int, default=32)
-    ap.add_argument("--paths", type=int, default=30)
+    ap.add_argument("--paths", type=int, default=120,
+                    help="random walks for null_edge (default 120)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rtol", type=float, default=1e-9,
                     help="relative tolerance for float signals (default 1e-9)")

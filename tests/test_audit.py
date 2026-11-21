@@ -32,9 +32,6 @@ def _bt(sig_fn, shift=0, sl=2.0, tp=3.0, trail=False, cost=None):
     return bt
 
 
-
-
-
 class TestRandomWalkBars:
     def test_valid_ohlc(self):
         d = random_walk_bars(500, seed=3)
@@ -172,7 +169,7 @@ class TestNullEdge:
         assert r.verdict == "fail" and "LOSS ON RANDOM DATA" in r.summary
 
     def test_entry_before_signal_fails_against_placebo(self):
-        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=12, n_bars=3000)
+        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=40, n_bars=3000)
         assert r.verdict == "fail" and "DIFFERS FROM RANDOM DIRECTIONS" in r.summary
 
     def test_direction_dependent_stops_pass(self):
@@ -200,11 +197,57 @@ class TestNullEdge:
         r = check_null_edge(_bt(sig_fn, shift=1), n_paths=12, n_bars=3000)
         assert "t_vs_placebo" in r.details and r.verdict == "fail"
 
+    def test_flip_is_thread_local_and_restored(self):
+        import threading
+        from backtest_engine import core
+        from backtest_engine.audit import _coin_flip_directions
+        d = random_walk_bars(2000, seed=5)
+        bt = _bt(_rsi_sig)
+        plain = np.asarray(bt(d)["pnl_r"])
+        seen = {}
+        def other():
+            seen["pnl"] = np.asarray(bt(d)["pnl_r"])
+        with _coin_flip_directions(np.random.SeedSequence(1)):
+            th = threading.Thread(target=other)
+            th.start(); th.join()
+            flipped = np.asarray(bt(d)["pnl_r"])
+        np.testing.assert_array_equal(seen["pnl"], plain)      # other thread untouched
+        assert not np.array_equal(flipped, plain)
+        with pytest.raises(RuntimeError):
+            with _coin_flip_directions(np.random.SeedSequence(2)):
+                raise RuntimeError("boom")
+        assert getattr(core._DIRECTION_FLIP, "rng", None) is None
+
+    def test_hires_is_flipped_once(self, monkeypatch):
+        from backtest_engine import core, simulate_trades_hires
+        from backtest_engine.audit import _coin_flip_directions
+        calls = []
+        real_sim = core.simulate_trades
+        def spy(*a, **k):
+            calls.append(np.asarray(k.get("directions", a[4] if len(a) > 4 else None)).copy())
+            return real_sim(*a, **k)
+        monkeypatch.setattr(core, "simulate_trades", spy)
+        ts_1m = np.arange(6000, dtype=np.int64) * 60
+        c = 1.1 + np.cumsum(np.random.default_rng(0).normal(0, 1e-4, 6000))
+        o = np.r_[c[0], c[:-1]]; h = np.maximum(o, c) + 1e-4; l = np.minimum(o, c) - 1e-4
+        ts_1h = np.arange(100, dtype=np.int64) * 3600
+        dirs = np.ones(40, dtype=np.int8)
+        with _coin_flip_directions(np.random.SeedSequence(3)):
+            simulate_trades_hires(signal_timestamps=ts_1h, signal_bars=np.arange(5, 85, 2, dtype=np.int32),
+                                  directions=dirs, sl_distances=np.full(40, 0.002),
+                                  tp_distances=np.full(40, 0.004), max_hold=5, signal_bar_minutes=60,
+                                  exec_timestamps=ts_1m, exec_opens=o, exec_highs=h, exec_lows=l,
+                                  exec_closes=c)
+        assert len(calls) == 1
+        np.testing.assert_array_equal(calls[0], dirs)          # flipped inside, once
+
     def test_seeds_share_no_paths(self):
         from backtest_engine.audit import random_walk_bars as rw
-        a = rw(100, seed=np.random.SeedSequence([0, 1]))["close"]
-        b = rw(100, seed=np.random.SeedSequence([1, 0]))["close"]
-        assert not np.allclose(a, b)
+        p0 = np.random.SeedSequence(0).spawn(3)
+        p1 = np.random.SeedSequence(1).spawn(3)
+        closes0 = [rw(100, seed=s)["close"] for s in p0]
+        closes1 = [rw(100, seed=s)["close"] for s in p1]
+        assert not any(np.allclose(a, b) for a in closes0 for b in closes1)
 
     @pytest.mark.parametrize("sl,tp,trail", [(0.5, 3.0, False), (1.0, 20.0, True), (2.0, 3.0, False)])
     def test_causal_tight_stops_and_trailing_pass(self, sl, tp, trail):

@@ -29,13 +29,13 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
    | Check | What it does | Catches |
    |---|---|---|
    | `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jump) and re-runs `signals`. A signal at or before the cut must not change. | Leaks that change signals: `shift(-1)`, centered windows, full-sample mean/std/min/max/quantile, `bfill`, zero-phase filters (`filtfilt`), FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample. Probabilistic |
-   | `null_edge` | Runs `backtest` on 30 driftless random walks, where no strategy can make money, and compares with the same trades under coin-flip directions. | Entries before their signal, exits or targets computed from later bars, look-ahead in library code; a backtest biased by the SL-first rule (`warn`) |
+   | `null_edge` | Runs `backtest` on 120 driftless random walks, where no strategy can make money, and compares with the same entries under coin-flip directions. | Entries before their signal, exits or targets computed from later bars, look-ahead in library code; a backtest biased by the SL-first rule (`warn`) |
    | `source:BG-04/07/09` | BugGuard source patterns | Some backward-fill and full-period quantile patterns, entry at close (pattern matching only) |
 
 3. Report the audit with the result:
    - `fail` on `lookahead`: the backtest is invalid. Do not report its PF or win rate as a result. Show the user the `summary` (it names the likely cause from which bars changed), fix it, and run the audit again.
-   - `fail` on `null_edge`: run it once more with `--seed 1` (different seeds share no random path). A clean strategy fails rarely (none of 360 benchmark runs); a real leak fails again. If it fails again, treat it like a look-ahead failure: the summary says whether the strategy makes money on random data (look-ahead) or differs from coin-flip directions (signals misaligned in time).
-   - `warn` on `null_edge`: the SL-first rule (a bar touching both SL and TP counts as SL) makes this backtest pessimistic. Re-run with `simulate_trades_hires` (1m fills) before reporting.
+   - `fail` on `null_edge`: treat it as a problem and look for it: the summary says whether the strategy makes money on random data (look-ahead) or differs from coin-flip directions (signals misaligned in time). A clean strategy fails in under 1% of runs (3 of 360 on the benchmark). Running once more with `--seed 1` (no shared random paths) helps: a second fail is conclusive; a pass after a fail is usually chance, but a weak leak (affecting a few trades) can also pass one run, so check the code at the place the summary points to before reporting.
+   - `warn` on `null_edge`: the SL-first rule (a bar touching both SL and TP counts as SL) makes this backtest pessimistic. Re-run with `simulate_trades_hires` (1m fills) before reporting. (Only costs passed as `entry_costs` are added back before the test; costs subtracted from `pnl_r` by hand also show up as this loss.)
    - `error`: the test could not run (too few signals or trades, a load error). Fix the input; do not treat it as a pass.
    - `pass`: say what was tested. Passing does not prove the absence of bias (survivorship, a leak that never changes a signal, or data errors are not covered).
 

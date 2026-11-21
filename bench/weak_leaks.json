@@ -1,0 +1,38 @@
+{
+  "early_0.0_paths_30": {
+    "fail": 0,
+    "warn": 0,
+    "pass": 20,
+    "runs": 20
+  },
+  "early_0.0_paths_120": {
+    "fail": 0,
+    "warn": 0,
+    "pass": 20,
+    "runs": 20
+  },
+  "early_0.2_paths_30": {
+    "fail": 4,
+    "warn": 0,
+    "pass": 16,
+    "runs": 20
+  },
+  "early_0.2_paths_120": {
+    "fail": 18,
+    "warn": 0,
+    "pass": 2,
+    "runs": 20
+  },
+  "early_0.5_paths_30": {
+    "fail": 20,
+    "warn": 0,
+    "pass": 0,
+    "runs": 20
+  },
+  "early_0.5_paths_120": {
+    "fail": 20,
+    "warn": 0,
+    "pass": 0,
+    "runs": 20
+  }
+}

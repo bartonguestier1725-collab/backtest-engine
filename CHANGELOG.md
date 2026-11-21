@@ -109,14 +109,16 @@ with v0.5.x before relying on them.
   four ways and re-runs the signal function; any change at or before the cut
   is look-ahead (half the cuts sit on or just before signal bars, so rare
   signals are tested; float noise is tolerated with `rtol`). `check_null_edge`
-  runs the whole backtest on 30 driftless random walks whose bar extremes
+  runs the whole backtest on 120 driftless random walks whose bar extremes
   come from a Brownian bridge (fair stop/target fills), tests the mean R
   before costs with paths as clusters, and compares with the same trades
-  under coin-flip directions (flipped inside `simulate_trades`, SL/TP
-  distances unchanged). On a labeled benchmark of 28 strategies (`bench/`),
-  the two together caught all 16 planted leaks with no false alarm on 12
-  clean ones; on real EURUSD 1h data the look-ahead verdicts were the same;
-  `null_edge` flagged none of 360 runs of the clean strategies. An LLM
+  under coin-flip directions (flipped inside `simulate_trades` in the
+  auditing thread, SL/TP distances unchanged). On a labeled benchmark of 28
+  strategies (`bench/`), the two together caught all 16 planted leaks with
+  no false alarm on 12 clean ones; on real EURUSD 1h data the look-ahead
+  verdicts were the same; `null_edge` flagged 3 of 360 runs of the clean
+  strategies (all at one seed) and caught a leak affecting 20% of trades in
+  18 of 20 runs. An LLM
   (Claude Sonnet) reading each strategy file caught 15 with 1 false alarm;
   it missed a leak inside an imported helper whose source it was not shown,
   which `check_null_edge` found.

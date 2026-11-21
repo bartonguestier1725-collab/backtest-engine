@@ -1,4 +1,26 @@
 {
   "runs": 360,
-  "flagged": []
+  "flagged": [
+    {
+      "case": "s09",
+      "seed": 1004,
+      "verdict": "fail",
+      "t": -3.74,
+      "t_vs_placebo": -3.58
+    },
+    {
+      "case": "s18",
+      "seed": 1004,
+      "verdict": "fail",
+      "t": -2.78,
+      "t_vs_placebo": -3.54
+    },
+    {
+      "case": "s28",
+      "seed": 1004,
+      "verdict": "fail",
+      "t": 3.65,
+      "t_vs_placebo": 3.87
+    }
+  ]
 }
