@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "RSI/ATR are causal on completed 1h bars (resample_ohlcv), signals at bar close are filled by simulate_trades_hires only after the signal bar closes on 1m bars, and SL/TP are fixed from ATR at signal time, so no future information is used."}

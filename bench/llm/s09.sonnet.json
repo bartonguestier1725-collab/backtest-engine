@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "EWM（adjust=False）・atr は因果的で、シグナルは足の終値で計算され、simulate_trades が次の足の始値で約定し、SL/TP は ATR（シグナル足まで）で決まり、max_hold は固定なので、先読みはない。"}

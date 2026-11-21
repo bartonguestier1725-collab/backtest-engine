@@ -1,0 +1,154 @@
+{
+  "s01": {
+    "name": "donchian_break",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s02": {
+    "name": "ols_in_sample",
+    "leak": true,
+    "kind": "model_fit_full_period",
+    "layer": "signal"
+  },
+  "s03": {
+    "name": "timed_exit",
+    "leak": true,
+    "kind": "exit_uses_next_bar",
+    "layer": "execution"
+  },
+  "s04": {
+    "name": "smoothed_slope",
+    "leak": true,
+    "kind": "zero_phase_filter",
+    "layer": "signal"
+  },
+  "s05": {
+    "name": "ols_walk_forward_threshold",
+    "leak": true,
+    "kind": "threshold_from_future_window",
+    "layer": "signal",
+    "note": "written as a clean control; the look-ahead test found that the threshold q uses predictions of bars up to 749 for bars before 749"
+  },
+  "s06": {
+    "name": "pivot_lows",
+    "leak": true,
+    "kind": "future_confirmed_pivot",
+    "layer": "signal"
+  },
+  "s07": {
+    "name": "adaptive_target",
+    "leak": true,
+    "kind": "target_from_future",
+    "layer": "execution"
+  },
+  "s08": {
+    "name": "early_entry",
+    "leak": true,
+    "kind": "entry_before_signal",
+    "layer": "execution"
+  },
+  "s09": {
+    "name": "ewm_momentum",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s10": {
+    "name": "cycle_filter",
+    "leak": true,
+    "kind": "full_period_fft",
+    "layer": "signal"
+  },
+  "s11": {
+    "name": "gap_filled_trend",
+    "leak": true,
+    "kind": "backfill",
+    "layer": "signal"
+  },
+  "s12": {
+    "name": "htf_current_bar",
+    "leak": true,
+    "kind": "incomplete_htf_bar",
+    "layer": "signal"
+  },
+  "s13": {
+    "name": "next_bar_direction",
+    "leak": true,
+    "kind": "next_bar",
+    "layer": "signal"
+  },
+  "s14": {
+    "name": "rsi_reversal",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s15": {
+    "name": "centered_mean",
+    "leak": true,
+    "kind": "centered_window",
+    "layer": "signal"
+  },
+  "s16": {
+    "name": "minmax_oscillator",
+    "leak": true,
+    "kind": "full_period_stat",
+    "layer": "signal"
+  },
+  "s17": {
+    "name": "vol_regime_expanding",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s18": {
+    "name": "bollinger_break",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s19": {
+    "name": "sma_cross",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s20": {
+    "name": "vol_regime_fixed",
+    "leak": true,
+    "kind": "full_period_stat",
+    "layer": "signal"
+  },
+  "s21": {
+    "name": "htf_trend_filter",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s22": {
+    "name": "zscore_reversion",
+    "leak": true,
+    "kind": "full_period_stat",
+    "layer": "signal"
+  },
+  "s23": {
+    "name": "ols_walk_forward",
+    "leak": false,
+    "kind": "none",
+    "layer": "signal"
+  },
+  "s24": {
+    "name": "hires_helper_lookahead",
+    "leak": true,
+    "kind": "library_entry_timing",
+    "layer": "library",
+    "note": "strategy file is clean; the imported helper is backtest_engine v0.5.1's hires mapping (entry 1 exec bar after the signal bar opens)"
+  },
+  "s25": {
+    "name": "hires_engine",
+    "leak": false,
+    "kind": "none",
+    "layer": "library"
+  }
+}

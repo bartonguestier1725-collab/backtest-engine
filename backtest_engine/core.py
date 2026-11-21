@@ -22,6 +22,18 @@ class DataQualityWarning(UserWarning):
     signal (simulate_trades_hires: truncated or gapped fine-resolution data)."""
 
 
+def _epoch_seconds(ts, name: str) -> np.ndarray:
+    """int64 Unix seconds from an int array or a datetime64 array."""
+    arr = np.asarray(ts)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype("datetime64[s]").astype(np.int64)
+    if not np.issubdtype(arr.dtype, np.integer):
+        if np.issubdtype(arr.dtype, np.floating) and np.all(np.isfinite(arr)) and np.all(arr == np.round(arr)):
+            return arr.astype(np.int64)
+        raise ValueError(f"{name} must be Unix seconds (int) or datetime64, got {arr.dtype}")
+    return arr.astype(np.int64)
+
+
 def _fmt_ts(ts) -> str:
     import datetime
     return datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
@@ -44,6 +56,20 @@ def _stop_fill(direction, stop_price, bar_open, has_open):
         if direction == SHORT and bar_open > stop_price:
             return bar_open
     return stop_price
+
+
+@numba.njit(cache=True)
+def _opens_beyond(direction, target, bar_open, has_open):
+    """True if the bar opened at or beyond a profit target (a gap through it).
+
+    The open is the first price of the bar, so the target filled before any
+    stop the rest of the bar may touch.
+    """
+    if not has_open:
+        return False
+    if direction == LONG:
+        return bar_open >= target
+    return bar_open <= target
 
 
 @numba.njit(cache=True)
@@ -169,13 +195,16 @@ def _sim_rr_inner(
         # is already "live" and can hit SL/TP. Close-entry starts on the bar
         # after the signal; retrace-fill starts after the fill bar (checked
         # above for SL only).
-        start_bar = entry_bar[t] if (use_open_entry and not use_retrace) else entry_bar[t] + 1
-        end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
+        open_entry = use_open_entry and not use_retrace
+        start_bar = entry_bar[t] if open_entry else entry_bar[t] + 1
+        # max_hold bars are held: bars entry..entry+max_hold-1 after an open
+        # entry, bars entry+1..entry+max_hold after a close (or limit) fill.
+        end_bar = min(entry_bar[t] + max_hold + (0 if open_entry else 1), n_bars)
 
         for b in range(start_bar, end_bar):
             # SL check
             if direction == LONG:
-                if low[b] <= current_sl:
+                if low[b] <= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                     exit_price = _stop_fill(direction, current_sl, open_prices[b], use_open_entry)
                     pnl_r[t] = (exit_price - entry_price) / sl_dist
                     hold_bars[t] = b - entry_bar[t]
@@ -191,7 +220,7 @@ def _sim_rr_inner(
                         worst_mae = bar_mae
                     break
             else:
-                if high[b] >= current_sl:
+                if high[b] >= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                     exit_price = _stop_fill(direction, current_sl, open_prices[b], use_open_entry)
                     pnl_r[t] = (entry_price - exit_price) / sl_dist
                     hold_bars[t] = b - entry_bar[t]
@@ -326,12 +355,11 @@ def _sim_trailing_inner(
             entry_price = ref_price
             entry_bar[t] = sig_bar
 
-        sl_ref_price = entry_price if use_open_entry else ref_price
         if direction == LONG:
-            sl_price = sl_ref_price - sl_dist
+            sl_price = entry_price - sl_dist
             tp_price = entry_price + tp_dist
         else:
-            sl_price = sl_ref_price + sl_dist
+            sl_price = entry_price + sl_dist
             tp_price = entry_price - tp_dist
 
         trail_active = False
@@ -348,7 +376,7 @@ def _sim_trailing_inner(
             best_price = entry_price
 
         start_bar = entry_bar[t] if use_open_entry else entry_bar[t] + 1
-        end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
+        end_bar = min(entry_bar[t] + max_hold + (0 if use_open_entry else 1), n_bars)
 
         for b in range(start_bar, end_bar):
             # Determine current SL using OLD best_price (before this bar's update)
@@ -364,7 +392,7 @@ def _sim_trailing_inner(
 
             # SL check (priority over TP)
             if direction == LONG:
-                if low[b] <= current_sl:
+                if low[b] <= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                     exit_price = _stop_fill(direction, current_sl, open_prices[b], use_open_entry)
                     pnl_r[t] = (exit_price - entry_price) / sl_dist
                     hold_bars[t] = b - entry_bar[t]
@@ -379,7 +407,7 @@ def _sim_trailing_inner(
                         worst_mae = bar_mae
                     break
             else:
-                if high[b] >= current_sl:
+                if high[b] >= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                     exit_price = _stop_fill(direction, current_sl, open_prices[b], use_open_entry)
                     pnl_r[t] = (entry_price - exit_price) / sl_dist
                     hold_bars[t] = b - entry_bar[t]
@@ -515,17 +543,16 @@ def _sim_custom_inner(
             entry_price = ref_price
             entry_bar[t] = sig_bar
 
-        sl_ref_price = entry_price if use_open_entry else ref_price
         if direction == LONG:
-            sl_price = sl_ref_price - sl_dist
+            sl_price = entry_price - sl_dist
         else:
-            sl_price = sl_ref_price + sl_dist
+            sl_price = entry_price + sl_dist
 
         best_mfe = 0.0
         worst_mae = 0.0
         trade_closed = False
         start_bar = entry_bar[t] if use_open_entry else entry_bar[t] + 1
-        end_bar = min(entry_bar[t] + max_hold + 1, n_bars)
+        end_bar = min(entry_bar[t] + max_hold + (0 if use_open_entry else 1), n_bars)
 
         for b in range(start_bar, end_bar):
             # SL check (always active, priority)
@@ -558,16 +585,21 @@ def _sim_custom_inner(
                         worst_mae = bar_mae
                     break
 
-            # Custom exit signal check
+            # Custom exit signal check. The signal is known at bar b's close;
+            # with open prices the exit fills at the next bar's open.
             if exit_signals[b]:
+                xb = b
                 exit_price = close[b]
+                if use_open_entry and b + 1 < n_bars:
+                    xb = b + 1
+                    exit_price = open_prices[xb]
                 if direction == LONG:
                     pnl_r[t] = (exit_price - entry_price) / sl_dist
                 else:
                     pnl_r[t] = (entry_price - exit_price) / sl_dist
-                hold_bars[t] = b - entry_bar[t]
+                hold_bars[t] = xb - entry_bar[t]
                 exit_type[t] = EXIT_CUSTOM
-                exit_bar[t] = b
+                exit_bar[t] = xb
                 trade_closed = True
                 if direction == LONG:
                     bar_mfe = (high[b] - entry_price) / sl_dist
@@ -678,7 +710,7 @@ def _sim_sar_trailing_inner(
         worst_mae    = 0.0
         trade_closed = False
         start_bar    = entry_bar[t] if use_open_entry else entry_bar[t] + 1
-        end_bar      = min(entry_bar[t] + max_hold + 1, n_bars)
+        end_bar      = min(entry_bar[t] + max_hold + (0 if use_open_entry else 1), n_bars)
 
         for b in range(start_bar, end_bar):
             sar_val = sar_values[b]
@@ -690,7 +722,7 @@ def _sim_sar_trailing_inner(
                     # SAR below price -> normal trailing SL
                     current_sl    = max(hard_sl, sar_val)
                     sar_triggered = (sar_val > hard_sl)
-                    if low[b] <= current_sl:
+                    if low[b] <= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                         pnl_r[t]     = (_stop_fill(direction, current_sl, open_prices[b], use_open_entry) - entry_price) / sl_dist
                         hold_bars[t] = b - entry_bar[t]
                         exit_type[t] = EXIT_TRAIL if sar_triggered else EXIT_SL
@@ -704,7 +736,7 @@ def _sim_sar_trailing_inner(
                 else:
                     # SAR above price -> TP target (counter-trend / SAR flip)
                     # Pessimistic: hard SL first
-                    if low[b] <= hard_sl:
+                    if low[b] <= hard_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                         pnl_r[t]     = (_stop_fill(direction, hard_sl, open_prices[b], use_open_entry) - entry_price) / sl_dist
                         hold_bars[t] = b - entry_bar[t]
                         exit_type[t] = EXIT_SL
@@ -747,7 +779,7 @@ def _sim_sar_trailing_inner(
                     # SAR above price -> normal trailing SL
                     current_sl    = min(hard_sl, sar_val)
                     sar_triggered = (sar_val < hard_sl)
-                    if high[b] >= current_sl:
+                    if high[b] >= current_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                         pnl_r[t]     = (entry_price - _stop_fill(direction, current_sl, open_prices[b], use_open_entry)) / sl_dist
                         hold_bars[t] = b - entry_bar[t]
                         exit_type[t] = EXIT_TRAIL if sar_triggered else EXIT_SL
@@ -761,7 +793,7 @@ def _sim_sar_trailing_inner(
                 else:
                     # SAR below price -> TP target
                     # Pessimistic: hard SL first
-                    if high[b] >= hard_sl:
+                    if high[b] >= hard_sl and not _opens_beyond(direction, tp_price, open_prices[b], use_open_entry):
                         pnl_r[t]     = (entry_price - _stop_fill(direction, hard_sl, open_prices[b], use_open_entry)) / sl_dist
                         hold_bars[t] = b - entry_bar[t]
                         exit_type[t] = EXIT_SL
@@ -867,7 +899,9 @@ def simulate_trades(
     sl_distances : 1-D float64 array of stop-loss distances from the entry
                    (fill) price. 1R = this distance.
     tp_distances : 1-D float64 array of take-profit distances from entry.
-    max_hold : Maximum bars to hold a trade before timeout.
+    max_hold : Bars a trade is held before a timeout exit at the close of the
+               last one (>= 1). With next-bar-open entry the entry bar counts
+               as the first; with close or limit entry the first is the next bar.
     exit_mode : "rr" (fixed RR), "trailing", "custom", or "sar_trailing".
     be_trigger_pct : Fraction of TP distance that triggers breakeven (0=disabled).
     retrace_pct : Fraction of TP distance for limit entry (0=market order).
@@ -940,6 +974,8 @@ def simulate_trades(
             )
         if np.any(sl_distances <= 0):
             raise ValueError("sl_distances must be > 0 (used as divisor for R-multiples)")
+    if max_hold < 1:
+        raise ValueError("max_hold must be >= 1 (bars a trade may be held)")
 
     if open_prices is not None:
         o_chk = np.asarray(open_prices, dtype=np.float64)
@@ -1096,12 +1132,15 @@ def simulate_trades_hires(
     on signal bar k is known when that bar closes, so the trade enters at the
     open of the first execution bar starting at or after
     ``signal_timestamps[k] + signal_bar_minutes * 60``. The returned
-    ``signal_bar`` field is the last execution bar inside signal bar k, so
-    ``entry_bar > signal_bar`` for every filled trade.
+    ``signal_bar`` field is the execution bar just before the entry bar
+    (normally the last one inside signal bar k), so ``entry_bar > signal_bar``
+    for every filled trade.
 
     Signals that close outside the execution data are returned as NO_FILL
-    (pnl_r=0) with a DataQualityWarning, as are entries delayed by a gap in
-    the execution data (those still trade, later).
+    (pnl_r=0) with a DataQualityWarning. Entries delayed by a gap in the
+    execution data still trade, later, and also emit a DataQualityWarning.
+    Timestamps must be Unix seconds (datetime64 arrays are converted); their
+    usual spacing must match ``signal_bar_minutes`` / ``exec_bar_minutes``.
 
     Parameters
     ----------
@@ -1109,6 +1148,7 @@ def simulate_trades_hires(
     signal_bars : int32 array of bar indices in the signal timeframe.
     directions, sl_distances, tp_distances : Same as simulate_trades.
     max_hold : Max hold in signal-timeframe bars (auto-converted to exec bars).
+               ``retrace_timeout`` in kwargs is converted the same way.
     signal_bar_minutes : Bar size of signal timeframe (e.g. 60 for 1h).
     exec_timestamps : int64 array of Unix timestamps for execution timeframe.
     exec_opens, exec_highs, exec_lows, exec_closes : Execution-timeframe OHLC.
@@ -1158,14 +1198,27 @@ def simulate_trades_hires(
             f"Use simulate_trades() directly if resolutions are equal."
         )
 
-    signal_timestamps = np.asarray(signal_timestamps, dtype=np.int64)
-    exec_timestamps = np.asarray(exec_timestamps, dtype=np.int64)
+    signal_timestamps = _epoch_seconds(signal_timestamps, "signal_timestamps")
+    exec_timestamps = _epoch_seconds(exec_timestamps, "exec_timestamps")
     signal_bars = np.ascontiguousarray(signal_bars, dtype=np.int32)
     n_exec = len(exec_timestamps)
     if n_exec < 2:
         raise ValueError("exec_timestamps must contain at least 2 bars")
     if np.any(np.diff(exec_timestamps) <= 0):
         raise ValueError("exec_timestamps must be strictly increasing")
+    # The usual spacing must match the declared bar sizes. This catches
+    # milliseconds passed as seconds (which would bring the 59-minute
+    # look-ahead back) and 5m data passed without exec_bar_minutes=5.
+    for name, ts, minutes in (("exec_timestamps", exec_timestamps, exec_bar_minutes),
+                              ("signal_timestamps", signal_timestamps, signal_bar_minutes)):
+        if len(ts) >= 3:
+            step = int(np.median(np.diff(ts)))
+            if step != int(minutes) * 60:
+                raise ValueError(
+                    f"{name}: bars are usually {step} s apart, but the bar size is "
+                    f"{minutes} min ({int(minutes) * 60} s). Timestamps must be Unix "
+                    f"seconds of the bar open, and the *_bar_minutes arguments must "
+                    f"match the data.")
     if len(signal_bars) > 0 and (
         signal_bars.min() < 0 or signal_bars.max() >= len(signal_timestamps)
     ):
@@ -1194,11 +1247,17 @@ def simulate_trades_hires(
     covered = (entry_idx >= 1) & (entry_idx < n_exec)
     exec_signal_bars = np.clip(entry_idx - 1, 0, n_exec - 1).astype(np.int32)
 
+    # A signal on the last bar of data that ends with the exec data has no
+    # bar to enter on: NO_FILL, as in simulate_trades, without a warning.
+    # Warn only when the exec data starts after, or ends before, the signal.
+    exec_end = exec_timestamps[-1] + int(exec_bar_minutes) * 60
+    outside = (entry_idx == 0) | (close_times > exec_end)
+    n_outside = int(np.sum(outside))
     n_uncovered = int(np.sum(~covered))
-    if n_uncovered:
+    if n_outside:
         warnings.warn(
-            f"{n_uncovered}/{len(signal_bars)} signals close outside the execution "
-            f"data ({_fmt_ts(exec_timestamps[0])} .. {_fmt_ts(exec_timestamps[-1])}). "
+            f"{n_outside}/{len(signal_bars)} signals close outside the execution "
+            f"data ({_fmt_ts(exec_timestamps[0])} .. {_fmt_ts(exec_end)}). "
             f"They are returned as NO_FILL with pnl_r=0. If the exec data was "
             f"fetched in one request, it may have been truncated.",
             DataQualityWarning,
@@ -1224,9 +1283,11 @@ def simulate_trades_hires(
             stacklevel=2,
         )
 
-    # Convert max_hold from signal bars to exec bars
+    # Convert max_hold (and retrace_timeout) from signal bars to exec bars
     ratio = signal_bar_minutes // exec_bar_minutes
     max_hold_exec = max_hold * ratio
+    if kwargs.get("retrace_timeout", 0) > 0:
+        kwargs["retrace_timeout"] = int(kwargs["retrace_timeout"]) * ratio
 
     results = simulate_trades(
         high=exec_highs,

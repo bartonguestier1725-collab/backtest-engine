@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals: cutoff = np.nanquantile(a, 0.7)", "reason": "高ボラ判定のしきい値が全期間のATR分布の70%点で計算されており、バーの時点では未来のデータを含む全サンプル統計を使っている。"}

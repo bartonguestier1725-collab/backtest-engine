@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "ATR・expanding quantile・12本モメンタムはいずれも当該バーまでのデータだけで計算され、エントリーは次バー始値、SL/TP 幅もシグナルバーの ATR なので先読みはない。"}

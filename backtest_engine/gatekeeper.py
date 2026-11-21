@@ -24,8 +24,8 @@ Usage:
     )
 
     # Gate 0: auto-runs BugGuard. Pass the simulation result so the
-    # trade-level checks (look-ahead, same-bar reentry, trade count, no-SL,
-    # open-price entry, fixed cost) run too.
+    # trade-level checks (trade count, overlapping trades, no-SL, open-price
+    # entry, fixed cost) run too.
     gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))
 
     # Gate 1: provide a function that takes param_dict → metric_dict
@@ -158,10 +158,11 @@ class GateKeeper:
         Parameters
         ----------
         trades : TradeResults from simulate_trades / simulate_trades_hires.
-                 Enables BG-01 (look-ahead), BG-06b (trade count), BG-08
-                 (same-bar reentry), BG-09b (open-price entry) and BG-12
-                 (fixed cost, inferred from ``cost_r``). NO_FILL trades are
-                 ignored.
+                 Enables BG-06b (trade count), BG-08 (overlapping trades,
+                 WARN), BG-09b (open-price entry) and BG-12 (fixed cost,
+                 inferred from ``cost_r``). NO_FILL trades are ignored.
+                 None of these find look-ahead inside the signal code; use
+                 ``backtest_engine.audit`` for that.
         sl_distances : SL distances passed to the simulation (same length as
                        ``trades``). Enables BG-12 and BG-14.
         avg_price : Representative price (e.g. median close). Enables BG-14.
@@ -188,9 +189,11 @@ class GateKeeper:
                 f"resolution_minutes (BG-05 assumes {self.resolution_minutes}min = bar_minutes)"
             )
         if trades is None:
-            missing.append("trades (BG-01/06b/08/09b/12 skipped)")
+            missing.append("trades (BG-06b/08/09b/12 skipped)")
         if sl_distances is None or avg_price <= 0:
             missing.append("sl_distances + avg_price (BG-14 skipped)")
+        if timestamps is None:
+            missing.append("timestamps (BG-10 skipped)")
 
         trade_kwargs: dict[str, Any] = {}
         n_filled = 0
@@ -201,16 +204,21 @@ class GateKeeper:
             f = arr[filled][order]
             quality = getattr(trades, "quality", None)
             has_open = getattr(quality, "has_open_prices", None)
-            trade_kwargs["entry_bars"] = f["entry_bar"]
-            trade_kwargs["exit_bars"] = f["exit_bar"]
+            if has_open is None and len(f) and "signal_bar" in (arr.dtype.names or ()):
+                # Metadata lost (e.g. np.concatenate): infer the entry mode.
+                # Close entry enters on the signal bar itself.
+                if np.all(f["entry_bar"] == f["signal_bar"]):
+                    has_open = False
+                elif np.all(f["entry_bar"] > f["signal_bar"]):
+                    has_open = True
             n_filled = len(f)
             trade_kwargs["n_trades"] = n_filled  # 0 skips BG-06b; added below
             if has_open is not None:
                 trade_kwargs["open_prices_provided"] = bool(has_open)
-            # Close entry (no open_prices) enters on the signal bar by design;
-            # BG-09b reports that. BG-01 checks next-bar-open / retrace / hires.
-            if has_open is not False and "signal_bar" in (arr.dtype.names or ()):
-                trade_kwargs["signal_bars"] = f["signal_bar"]
+            # BG-01 (signal_bar < entry_bar) is not run: simulate_trades sets
+            # entry_bar from signal_bar itself, so it cannot fail for engine
+            # output. Look-ahead inside the signal code needs
+            # backtest_engine.audit or reading the code.
             if sl_distances is not None:
                 sl = np.asarray(sl_distances, dtype=np.float64)
                 if len(sl) != len(arr):
@@ -253,6 +261,23 @@ class GateKeeper:
         if trades is not None and n_filled == 0:
             from backtest_engine.bug_guard import check_min_trades
             report.results.append(check_min_trades(0))
+        if trades is not None and n_filled >= 2:
+            # BG-08 targets one-position-at-a-time code that re-enters at the
+            # open of the bar it just exited on. simulate_trades runs each
+            # trade independently, so here a match only means trades overlap.
+            prev_exit = f["exit_bar"][:-1]
+            same = int(np.sum(f["entry_bar"][1:] == prev_exit))
+            if same:
+                report.results.append(CheckResult(
+                    "BG-08", False,
+                    f"OVERLAPPING TRADES: {same} trades enter on the bar where the "
+                    f"previous trade exits. Trades are simulated independently, so this "
+                    f"is not a look-ahead; if the live strategy holds one position at a "
+                    f"time, filter the signals so each entry comes after the previous exit.",
+                    severity="WARN",
+                ))
+            else:
+                report.results.append(CheckResult("BG-08", True, "No same-bar reentries"))
 
         # Append GK-00 before printing so counts are correct
         if gk00 is not None:

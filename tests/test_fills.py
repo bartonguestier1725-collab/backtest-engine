@@ -5,7 +5,7 @@ import pytest
 
 from backtest_engine import (
     simulate_trades, LONG, SHORT,
-    EXIT_SL, EXIT_TP, EXIT_BE, EXIT_TRAIL, EXIT_TIME, EXIT_NO_FILL,
+    EXIT_SL, EXIT_TP, EXIT_BE, EXIT_TRAIL, EXIT_TIME, EXIT_NO_FILL, EXIT_CUSTOM,
 )
 
 
@@ -14,13 +14,13 @@ def _bars(n=10, price=100.0):
     return o, o + 0.5, o - 0.5, o.copy()
 
 
-def _one(o, h, l, c, direction, sl, tp, use_open=True, **kw):
+def _one(o, h, l, c, direction, sl, tp, use_open=True, max_hold=8, **kw):
     return simulate_trades(
         h, l, c,
         signal_bars=np.array([0], dtype=np.int32),
         directions=np.array([direction], dtype=np.int8),
         sl_distances=np.array([sl]), tp_distances=np.array([tp]),
-        max_hold=8, open_prices=o if use_open else None, **kw,
+        max_hold=max_hold, open_prices=o if use_open else None, **kw,
     )[0]
 
 
@@ -160,3 +160,67 @@ class TestSignalBarField:
                             max_hold=3, open_prices=o)
         np.testing.assert_array_equal(r["signal_bar"], [2, 7])
         np.testing.assert_array_equal(r["entry_bar"], [3, 8])
+
+
+class TestTpGap:
+    def test_open_beyond_tp_is_tp_even_if_sl_touched(self):
+        o, h, l, c = _bars()
+        # entry 100, SL 95, TP 110. Bar 3 opens at 112 (gap through TP), then
+        # trades down to 94: the TP filled at the open, before the SL touch.
+        o[3], h[3], l[3], c[3] = 112.0, 112.5, 94.0, 96.0
+        r = _one(o, h, l, c, LONG, 5.0, 10.0)
+        assert r["exit_type"] == EXIT_TP
+        assert r["pnl_r"] == pytest.approx(2.0)
+
+    def test_short_open_beyond_tp(self):
+        o, h, l, c = _bars()
+        o[3], h[3], l[3], c[3] = 88.0, 106.0, 87.5, 104.0
+        r = _one(o, h, l, c, SHORT, 5.0, 10.0)
+        assert r["exit_type"] == EXIT_TP
+
+    def test_without_open_prices_sl_keeps_priority(self):
+        o, h, l, c = _bars()
+        h[3], l[3], c[3] = 112.5, 94.0, 96.0
+        r = _one(o, h, l, c, LONG, 5.0, 10.0, use_open=False)
+        assert r["exit_type"] == EXIT_SL
+
+
+class TestHoldWindow:
+    """max_hold bars are held in both entry modes (before v0.6.0 an open
+    entry held one bar more)."""
+
+    def test_open_entry_holds_max_hold_bars(self):
+        o, h, l, c = _bars(20)
+        r = _one(o, h, l, c, LONG, 50.0, 50.0, max_hold=3)  # never hits SL/TP
+        assert r["exit_type"] == EXIT_TIME
+        assert (r["entry_bar"], r["exit_bar"]) == (1, 3)     # bars 1, 2, 3
+
+    def test_close_entry_holds_max_hold_bars(self):
+        o, h, l, c = _bars(20)
+        r = _one(o, h, l, c, LONG, 50.0, 50.0, use_open=False, max_hold=3)
+        assert (r["entry_bar"], r["exit_bar"]) == (0, 3)     # bars 1, 2, 3
+
+    def test_max_hold_zero_raises(self):
+        o, h, l, c = _bars()
+        with pytest.raises(ValueError, match="max_hold"):
+            _one(o, h, l, c, LONG, 5.0, 10.0, max_hold=0)
+
+
+class TestCustomExitFill:
+    def test_exit_at_next_open_with_open_prices(self):
+        o, h, l, c = _bars(12)
+        sig = np.zeros(12, dtype=bool); sig[3] = True
+        o[4] = 103.0; h[4] = 103.5; c[4] = 103.0
+        r = _one(o, h, l, c, LONG, 5.0, 20.0, exit_mode="custom", exit_signals=sig)
+        assert r["exit_type"] == EXIT_CUSTOM
+        assert r["exit_bar"] == 4
+        assert r["pnl_r"] == pytest.approx(3.0 / 5.0)
+
+    def test_exit_at_close_without_open_prices(self):
+        o, h, l, c = _bars(12)
+        sig = np.zeros(12, dtype=bool); sig[3] = True
+        c[3] = 102.0; h[3] = 102.5
+        r = _one(o, h, l, c, LONG, 5.0, 20.0, use_open=False,
+                 exit_mode="custom", exit_signals=sig)
+        assert r["exit_bar"] == 3
+        assert r["pnl_r"] == pytest.approx(2.0 / 5.0)

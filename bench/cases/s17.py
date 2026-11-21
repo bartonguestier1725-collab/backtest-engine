@@ -1,0 +1,22 @@
+import numpy as np
+import pandas as pd
+from backtest_engine import simulate_trades, atr, rsi, sma, LONG, SHORT
+
+
+def signals(data):
+    h, l, c = data["high"], data["low"], data["close"]
+    a = pd.Series(atr(h, l, c, 14))
+    hi_vol = (a > a.expanding(min_periods=200).quantile(0.7)).to_numpy()
+    mom = c - np.r_[np.full(12, np.nan), c[:-12]]
+    return np.where(hi_vol & (mom > 0), 1, np.where(hi_vol & (mom < 0), -1, 0))
+
+
+def backtest(data):
+    sig = signals(data)
+    o, h, l, c = data["open"], data["high"], data["low"], data["close"]
+    a = atr(h, l, c, 14)
+    sb = np.flatnonzero((sig != 0) & ~np.isnan(a))
+    sb = sb[sb < len(c) - 1].astype(np.int32)
+    d = np.sign(sig[sb]).astype(np.int8)
+    return simulate_trades(h, l, c, sb, d, a[sb] * 2.0, a[sb] * 3.0,
+                           max_hold=24, open_prices=o)

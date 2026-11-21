@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "backtest: reach = h[i+1:i+13].max() - o[sb+1]; tp = max(reach*0.9, ...)", "reason": "TP distance is set from the highest high over the next 12 bars after entry, so the take-profit uses future price information not available at entry."}

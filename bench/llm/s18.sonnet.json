@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "シグナルは当該バーの終値までの rolling 平均・標準偏差と ATR だけで計算され、エントリーは次バーの始値（open_prices[signal_bar+1]）なので、未来の情報は使われていません。"}

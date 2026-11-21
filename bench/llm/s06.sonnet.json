@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals, line with l[i - k:i + k + 1].min() / h[i - k:i + k + 1].max()", "reason": "バー i のシグナルが i+k（4本先）までの安値・高値を使う中心窓のスイング判定なので、バー i の終値時点では未確定の将来情報を使っている。"}

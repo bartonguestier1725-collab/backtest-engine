@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals(), line `q = np.nanstd(pred[:start + step])`", "reason": "The threshold q is the std of predictions over bars 500–749, but it is applied to bars 500–748 too, so those signals use a statistic that includes later predictions."}

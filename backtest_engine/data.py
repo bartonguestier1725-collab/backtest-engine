@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 import os
 import time
+import warnings
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
+
+from backtest_engine.core import DataQualityWarning
 
 
 __all__ = ["fetch_aggvault"]
@@ -44,7 +47,17 @@ _CHUNK_DAYS = {"1m": 180, "5m": 900, "15m": 2700}
 # Server rate limit is 10 requests/minute.
 _MIN_INTERVAL_SEC = 6.5
 _RETRY_WAIT_SEC = 61.0
+# Inside the requested range, a reply ending this long before its window end
+# is treated as cut short (FX weekends + holidays are shorter).
+_HOLE_SEC = 5 * 86400
 _sleep = time.sleep
+# Time of the last request, shared by all calls so a 1h fetch followed by a
+# 1m fetch is paced too.
+_LAST_REQUEST = [0.0]
+
+
+def _ymd(ts: int) -> str:
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
 
 
 class _NotFound(Exception):
@@ -77,9 +90,14 @@ def _get_bars(url, key, symbol, timeframe, base_url, max_retries, last_request):
                         f"Connection lost while reading AggVault API response: {re_}"
                     ) from re_
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < max_retries:
+            if e.code in (429, 503) and attempt < max_retries:
                 attempt += 1
-                _sleep(_RETRY_WAIT_SEC)
+                wait = _RETRY_WAIT_SEC
+                try:
+                    wait = min(max(float(e.headers.get("Retry-After", wait)), 1.0), 120.0)
+                except (TypeError, ValueError, AttributeError):
+                    pass
+                _sleep(wait)
                 last_request[0] = 0.0  # the wait above already paces the retry
                 continue
             body = ""
@@ -180,13 +198,15 @@ def fetch_aggvault(
     base_url : str
         API base URL. Defaults to ``https://tick.hugen.tokyo``.
     max_retries : int
-        How many times to wait ~1 minute and retry after HTTP 429.
+        How many times to wait and retry after HTTP 429 or 503 (~1 minute,
+        or the server's Retry-After).
 
     Notes
     -----
     The server returns at most 500,000 bars per request. Long 1m/5m/15m
     ranges are fetched in several requests (1m: 180-day windows, paced to the
     10 requests/minute limit), so 5 years of 1m data takes about a minute.
+    A window with no bars inside the range emits a DataQualityWarning.
 
     Returns
     -------
@@ -246,34 +266,55 @@ def fetch_aggvault(
 
     parts: list[tuple[np.ndarray, ...]] = []
     n_seen = 0
-    last_request = [0.0]
     not_found: Optional[RuntimeError] = None
-    for w_from, w_to in windows:
+    empty: list[tuple[int, int]] = []
+    for wi, (w_from, w_to) in enumerate(windows):
+        interior = wi < len(windows) - 1
         cur = w_from
+        got_any = False
         while cur <= w_to:
+            # limit is sent explicitly: if the server ever lowers its maximum,
+            # the request fails (HTTP 422) instead of being cut silently.
             url = (
                 f"{base_url}/api/v1/historical/{symbol_norm}"
-                f"?tf={timeframe}&from={cur}&to={w_to}"
+                f"?tf={timeframe}&from={cur}&to={w_to}&limit={_SERVER_LIMIT}"
             )
             try:
                 chunk = _get_bars(url, key, symbol, timeframe, base_url,
-                                  max_retries, last_request)
+                                  max_retries, _LAST_REQUEST)
             except _NotFound as e:
                 if len(windows) == 1:
                     raise RuntimeError(str(e)) from None
                 not_found = not_found or RuntimeError(str(e))
+                chunk = []
+            if not chunk:
                 break
-            if chunk:
-                # Convert per window so a long 1m fetch never holds millions
-                # of dicts at once.
-                parts.append(_to_arrays(chunk, n_seen))
-                n_seen += len(chunk)
-            if len(chunk) < _SERVER_LIMIT:
-                break
+            # Convert per window so a long 1m fetch never holds millions
+            # of dicts at once.
+            parts.append(_to_arrays(chunk, n_seen))
+            n_seen += len(chunk)
+            got_any = True
             last_t = int(parts[-1][0][-1])
             if last_t + 1 <= cur:
                 break
+            # Keep going while the reply was full, or (inside the range) while
+            # it stopped well before the window end: a lower server limit or a
+            # hole. The last window may end early because the data does.
+            if len(chunk) < _SERVER_LIMIT and not (interior and last_t < w_to - _HOLE_SEC):
+                break
             cur = last_t + 1
+        if not got_any:
+            empty.append((w_from, w_to))
+
+    if parts and empty:
+        warnings.warn(
+            f"fetch_aggvault: no {timeframe} bars for {len(empty)} of {len(windows)} "
+            f"request windows ({', '.join(f'{_ymd(a)}..{_ymd(b)}' for a, b in empty[:3])}"
+            f"{', ...' if len(empty) > 3 else ''}). The returned data has a hole there "
+            f"(or starts later than requested).",
+            DataQualityWarning,
+            stacklevel=2,
+        )
 
     if not parts:
         if not_found is not None:

@@ -1,0 +1,13 @@
+You are reviewing a trading strategy backtest for look-ahead bias: any use of information that would not be available at the time a trade is entered or exited (future prices, statistics over the whole sample, filters that look forward, targets or exits that depend on later bars, entries placed before the bar whose close produced the signal, and so on).
+
+Library context (backtest_engine):
+- data is a dict of numpy arrays: time (bar open, Unix seconds), open, high, low, close. One row per bar, oldest first.
+- signals(data) returns one value per bar: +1 long, -1 short, 0 none, computed at that bar's close.
+- simulate_trades(high, low, close, signal_bars, directions, sl_distances, tp_distances, max_hold, open_prices=o, ...) enters each trade at open_prices[signal_bar + 1] (the next bar's open) and then checks SL/TP from that bar on. exit_mode="custom" with exit_signals exits at the close of the first bar where exit_signals is True.
+- simulate_trades_hires(signal_timestamps, signal_bars, ..., exec_timestamps, exec_opens, ...) takes signals on coarse bars (e.g. 1h) and simulates fills on fine bars (e.g. 1m), entering after the signal bar closes.
+- sma, rsi, atr are standard causal indicators (each value uses only that bar and earlier bars). resample_ohlcv aggregates bars; map_higher_tf(lower_ts, higher_ts, values) maps each lower bar to the last COMPLETED higher-timeframe bar.
+
+Answer with one line of JSON only, no other text:
+{"lookahead": true or false, "where": "<function and line, or empty>", "reason": "<one sentence>"}
+
+Strategy file:

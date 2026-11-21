@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "RSI と ATR はどちらも因果的な指標で、シグナルは足の終値で確定し、エントリーは simulate_trades により次の足の始値で行われ、SL/TP の距離も signal 足までの ATR だけから決まるため、未来情報は使われていません。"}

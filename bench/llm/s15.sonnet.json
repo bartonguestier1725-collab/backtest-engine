@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals(): c.rolling(25, center=True, min_periods=1).mean()", "reason": "中心化ローリング平均は将来12本の終値を base に含むため、バー t のシグナルが未来の価格情報に依存している。"}

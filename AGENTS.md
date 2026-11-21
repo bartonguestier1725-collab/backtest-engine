@@ -1,0 +1,47 @@
+# AGENTS.md
+
+Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) that use this repository to backtest a trading idea for a user. `CLAUDE.md` has the same rules in Japanese plus Claude-specific notes.
+
+## Before you report any backtest result
+
+1. Write the strategy as one Python file with two functions:
+
+   ```python
+   def signals(data):   # data: dict of numpy arrays time/open/high/low/close
+       ...              # one value per bar: +1 long, -1 short, 0 none,
+       return sig       # computed from that bar's close and earlier bars
+
+   def backtest(data):  # the full pipeline on the same data
+       ...              # signals -> simulate_trades(..., open_prices=data["open"])
+       return results   # TradeResults
+   ```
+
+   Keep `signals` and `backtest` free of global state that depends on the data you fetched: the audit calls them on other data.
+
+2. Run the audit:
+
+   ```bash
+   uv run python -m backtest_engine.audit my_strategy.py --json
+   ```
+
+   It runs three groups of tests and prints JSON (`overall`: `pass` / `warn` / `fail` / `error`; exit code 1 on `fail`, 2 on `error`):
+
+   | Check | What it does | Catches |
+   |---|---|---|
+   | `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jump) and re-runs `signals`. A signal at or before the cut must not change. | `shift(-1)`, centered windows, full-sample mean/std/min/max/quantile, `bfill`, zero-phase filters (`filtfilt`), FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample |
+   | `null_edge` | Runs `backtest` on 20 driftless random walks, where no strategy can make money. | Entries before the signal bar, exits or targets computed from later bars, look-ahead in the execution code |
+   | `source:BG-04/07/09` | Pattern checks on the file. | `bfill`/`backfill`, full-period quantiles, entry at close |
+
+3. Report the audit with the result:
+   - `fail` on `lookahead` or `null_edge`: the backtest is invalid. Do not report its PF or win rate as a result. Show the user the failing check's `summary`, find the cause (the `reach_bars` of the examples tells you how far ahead it looks: 0–2 means the next bar or two; large means a statistic over the whole sample), fix it, and run the audit again.
+   - `warn` on `null_edge` (loss on random data): entries or exits are probably misaligned in time. Check how `signal_bars` are passed to `simulate_trades`.
+   - `pass`: say what was tested. Passing does not prove the absence of bias (survivorship, a leak that never changes a signal, or data errors are not covered).
+
+## Other rules
+
+- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m ≈ 1 minute).
+- Pass `open_prices` to `simulate_trades` (next-bar-open entry). Without it, entry is at the signal bar's close (optimistic).
+- Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))`. Gate 0 checks trade count, overlap, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for.
+- State whether results are GROSS (no costs) or NET (`entry_costs` from `BrokerCost`).
+- Interpret PF: < 1.0 losing; 1.0–1.1 weak, likely gone after costs; 1.1–1.5 a possible edge, validate with GateKeeper; above 1.5 suspect look-ahead or overfitting first.
+- Timestamps are bar open times in UTC (Unix seconds).

@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "backtest: simulate_trades(h, l, c, sb - 1, ...)", "reason": "signal_bars is set to sb - 1, so the trade enters at open[sb] (the signal bar's own open), before the RSI at the close of bar sb that produced the signal is known."}

@@ -79,8 +79,11 @@ class TestSimulateTradesHires:
             exec_closes=c_1m,
         )
 
-        # Should hold for ~600 1m bars (10h * 60min)
-        assert results["hold_bars"][0] == 600
+        # Holds 600 1m bars (10h): enters at the open of the 11:00 bar and
+        # times out at the close of the 20:59 bar, exactly 10 hours later.
+        entry, exit_ = results["entry_bar"][0], results["exit_bar"][0]
+        assert exit_ - entry + 1 == 600
+        assert ts_1m[exit_] + 60 - ts_1m[entry] == 10 * 3600
 
     def test_signal_bar_mapping_correct(self):
         """Signal on 1h bar 5 (opens 05:00, closes 06:00) enters at the 06:00 1m bar.
@@ -285,3 +288,51 @@ class TestHiresCoverage:
         ts_1m = ts_1m.copy(); ts_1m[[5, 6]] = ts_1m[[6, 5]]
         with pytest.raises(ValueError, match="strictly increasing"):
             _hires(ts_1h, [2], [LONG], [0.002], [0.004], ts_1m, o, h, l, c)
+
+
+class TestHiresTimestampUnits:
+    """Units other than Unix seconds used to bring the look-ahead back silently."""
+
+    def test_datetime64_ns_is_converted(self):
+        ts_1h, *_ = _make_bars(100, 0, 3600)
+        ts_1m, o, h, l, c = _make_bars(6000, 0, 60)
+        a = _hires(ts_1h, [3], [LONG], [0.002], [0.004], ts_1m, o, h, l, c)
+        b = _hires(ts_1h.astype("datetime64[s]").astype("datetime64[ns]"), [3], [LONG],
+                   [0.002], [0.004], ts_1m.astype("datetime64[s]").astype("datetime64[ns]"),
+                   o, h, l, c)
+        assert a["entry_bar"][0] == b["entry_bar"][0] == 240
+
+    def test_milliseconds_raise(self):
+        ts_1h, *_ = _make_bars(100, 0, 3600)
+        ts_1m, o, h, l, c = _make_bars(6000, 0, 60)
+        with pytest.raises(ValueError, match="Unix"):
+            _hires(ts_1h * 1000, [3], [LONG], [0.002], [0.004], ts_1m * 1000, o, h, l, c)
+
+    def test_5m_data_without_exec_bar_minutes_raises(self):
+        ts_1h, *_ = _make_bars(100, 0, 3600)
+        ts_5m, o, h, l, c = _make_bars(1200, 0, 300)
+        with pytest.raises(ValueError, match="exec_timestamps"):
+            _hires(ts_1h, [3], [LONG], [0.002], [0.004], ts_5m, o, h, l, c)
+
+
+class TestHiresEdges:
+    def test_last_signal_bar_is_silent_no_fill(self):
+        import warnings as _w
+        ts_1h, *_ = _make_bars(100, 0, 3600)
+        ts_1m, o, h, l, c = _make_bars(6000, 0, 60)   # both end at 100h
+        with _w.catch_warnings():
+            _w.simplefilter("error", DataQualityWarning)
+            r = _hires(ts_1h, [99], [LONG], [0.002], [0.004], ts_1m, o, h, l, c)
+        assert r["exit_type"][0] == EXIT_NO_FILL
+
+    def test_retrace_timeout_is_in_signal_bars(self):
+        n = 1200
+        ts_1m = np.arange(n, dtype=np.int64) * 60
+        c = np.full(n, 1.1000); o = c.copy(); h = c + 0.0001; l = c - 0.0001
+        ts_1h = np.arange(n // 60, dtype=np.int64) * 3600
+        fill_bar = 360 + 90                      # 90 min after the 06:00 entry time
+        l[fill_bar] = 1.0950                     # limit = 1.1000 - 1.0 * 0.004
+        r = _hires(ts_1h, [5], [LONG], [0.02], [0.004], ts_1m, o, h, l, c,
+                   retrace_pct=1.0, retrace_timeout=2)  # 2 signal bars = 120 min
+        assert r["exit_type"][0] != EXIT_NO_FILL
+        assert r["entry_bar"][0] == fill_bar

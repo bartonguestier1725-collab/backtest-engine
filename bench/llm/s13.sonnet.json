@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals(), line computing nxt = np.roll(c, -1) and np.sign(nxt - c)", "reason": "バー t のシグナルが次バーの終値 c[t+1] との差（未来の価格）から決まっており、バー t の終値時点では利用できない情報を使っている。"}

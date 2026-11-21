@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals(): `pos = (c - c.min()) / (c.max() - c.min())`", "reason": "pos は標本全体の close の最小値・最大値で正規化されており、各バーの時点では未知の将来の価格情報を含むため、シグナルが look-ahead になっている。"}

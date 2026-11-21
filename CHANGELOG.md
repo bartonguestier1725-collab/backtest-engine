@@ -3,10 +3,12 @@
 ## v0.6.0
 
 This release fixes several bugs that made results look different from what the
-code would do in a live market. **Results change** for `simulate_trades_hires`,
-for long `fetch_aggvault` 1m/5m/15m requests, for `retrace_pct` entries, and
-(slightly) for any simulation with `open_prices` where a stop was gapped.
-Re-run backtests made with v0.5.x before relying on them.
+code would do in a live market, and adds a strategy audit that finds
+look-ahead by behavior. **Results change** for `simulate_trades_hires`, for
+long `fetch_aggvault` 1m/5m/15m requests, for `retrace_pct` entries, for
+`exit_mode="custom"` with `open_prices`, for timeouts with `open_prices` (one
+bar shorter), and slightly for gapped stops and targets. Re-run backtests made
+with v0.5.x before relying on them.
 
 ### Bug fixes (results change)
 
@@ -16,7 +18,7 @@ Re-run backtests made with v0.5.x before relying on them.
   before the 1h close that produced the signal was known). Trades now enter at
   the open of the first execution bar at or after the signal bar's close.
   Measured on EURUSD 2024, RSI(14) 30/70, SL 2×ATR / TP 4×ATR, 696 trades,
-  NET with Tradeview ILC costs: PF 0.525 before, 0.908 after (1h fills: 0.898).
+  NET with Tradeview ILC costs: PF 0.525 before, 0.908 after (1h fills: 0.909).
   The README claim "1h-only PF 0.90 vs hires 0.53, a 41% overestimate" was an
   artifact of this bug and has been removed. The old test that fixed the old
   mapping (`test_signal_bar_mapping_correct`) now asserts the corrected one.
@@ -34,7 +36,8 @@ Re-run backtests made with v0.5.x before relying on them.
   fills at that open. A gapped stop can lose more than 1R. TP and SAR targets
   still fill at their price. Without `open_prices` the gap is unknowable and
   the stop price is used as before. EURUSD 2024 example above, 1h fills,
-  GROSS: PF 0.953 → 0.948.
+  GROSS: PF 0.953 → 0.948 from this rule alone (0.959 with all v0.6.0
+  changes, mostly the hold-window fix below).
 - **`retrace_pct` SL measured from the signal close** — the limit fills at
   `close ∓ retrace_pct × TP`, but the SL was placed `sl_distance` from the
   signal close. With a retrace deeper than the SL distance, a stop-out showed a
@@ -53,15 +56,37 @@ Re-run backtests made with v0.5.x before relying on them.
   RF 0.1 and another at PF 1.01 / RF 3 passed. Now at least one combo must meet
   both thresholds; `best_metric` is the best-PF combo among those.
 
+- **Open entry held one bar more than `max_hold`** — with `open_prices` the
+  entry bar counted as held but the timeout came `max_hold` bars after it, so
+  a trade was held `max_hold + 1` bars (close entry: `max_hold`). Both now hold
+  `max_hold` bars. `max_hold < 1` now raises.
+- **Custom exits filled at the close that produced the exit signal** — the
+  same optimism as entering at the signal bar's close. With `open_prices` the
+  exit now fills at the next bar's open.
+- **A bar that opened beyond the TP still counted as SL** when its low later
+  touched the SL. The open proves the TP filled first; it is now a TP (at the
+  TP price). Applies with `open_prices`, in the rr, trailing and SAR modes.
+- **`simulate_trades_hires` accepted timestamps in other units** — with
+  milliseconds or `datetime64[ns]` the 59-minute look-ahead came back silently
+  (found in review). `datetime64` is now converted; a bar spacing that does
+  not match `signal_bar_minutes` / `exec_bar_minutes` raises (this also
+  catches 5m data passed without `exec_bar_minutes=5`, which made `max_hold`
+  five times too long). `retrace_timeout` is now converted from signal bars to
+  execution bars like `max_hold`.
+
 ### Bug fixes (validation coverage)
 
 - **Gate 0 never ran the trade-level BugGuard checks** — `gate0_validate()`
-  took no trade data, so BG-01, BG-06b, BG-08, BG-09b, BG-12 and BG-14 never
-  ran inside the pipeline (only 6 of the 14 checks could run). It now takes
+  took no trade data, so BG-06b, BG-08, BG-09b, BG-12 and BG-14 never ran
+  inside the pipeline (only 6 of the 14 checks could run). It now takes
   `trades=` (a `TradeResults`), `sl_distances=`, `avg_price=` and
   `timestamps=`. NO_FILL trades are ignored; BG-12 (fixed cost) is inferred
-  from `cost_r`; BG-01 is skipped for close entry (no `open_prices`), which
-  BG-09b already reports. GK-00 lists every missing input.
+  from `cost_r`; the entry mode for BG-09b is inferred from the trades when
+  the metadata is lost (e.g. after `np.concatenate`). BG-08 is a WARN here:
+  trades are simulated independently, so overlapping trades are not a
+  same-bar re-entry bug. BG-01 is not run in Gate 0, since `simulate_trades`
+  sets the entry bar itself and it cannot fail. GK-00 lists every missing
+  input.
 - **`resolution_minutes` defaulted to 1** — a GateKeeper created without it
   passed BG-05 even for 1h fills. The default is now `None`, which means
   "same as `bar_minutes`", and GK-00 notes the assumption.
@@ -77,6 +102,18 @@ Re-run backtests made with v0.5.x before relying on them.
 
 ### New
 
+- **Strategy audit** (`backtest_engine/audit.py`, `python -m backtest_engine.audit
+  file.py [--json]`). `check_lookahead` rewrites the bars after a cut point
+  four ways and re-runs the signal function; any change at or before the cut
+  is look-ahead. `check_null_edge` runs the whole backtest on driftless random
+  walks and tests the mean R per trade across paths. On a labeled benchmark of
+  25 strategies (`bench/`), the two together caught all 16 planted leaks with
+  no false alarm on 9 clean ones; on real EURUSD 1h data the look-ahead
+  verdicts were the same. An LLM (Claude Sonnet) reading each strategy file
+  caught 15; it missed a leak inside an imported helper (the pre-v0.6.0 hires
+  mapping), which `check_null_edge` found.
+- `AGENTS.md`: how an AI assistant should backtest with this library (write
+  `signals`/`backtest`, run the audit, do not report a failing result).
 - `TradeResults` has a `signal_bar` field (same timeframe as `entry_bar`).
   For `simulate_trades_hires` it is the last execution bar inside the signal
   bar, so `entry_bar > signal_bar` for every filled trade.
@@ -89,6 +126,10 @@ Re-run backtests made with v0.5.x before relying on them.
 - `results.quality` is set even with `preflight=False` (only the warning is
   suppressed). Previously it was `None`.
 - `examples/rsi_reversal/compare_1h_vs_hires.py` reproduces the README table.
+- `fetch_aggvault`: sends `limit=500000` explicitly (a lower server maximum
+  now fails loudly), keeps requesting inside the range when a reply stops more
+  than 5 days before its window end, warns about request windows with no
+  data, paces requests across calls, and retries HTTP 503 as well as 429.
 
 ### Docs
 
@@ -105,10 +146,12 @@ Re-run backtests made with v0.5.x before relying on them.
 
 ### Tests
 
-- 343 → 408. New: `tests/test_fills.py` (gap and retrace fills),
+- 343 → 444. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
   `tests/test_utils.py` (`load_ohlcv`, `resample_ohlcv`, `find_signal_bar`),
-  hires timing and coverage, Gate 0 trade checks, Gate 2 same-combo rule,
-  BG-04/09/10 patterns, windowed fetch against a fake server.
+  hires timing, coverage and timestamp units, Gate 0 trade checks (including
+  overlapping 1h trades, which must not block), Gate 2 same-combo rule,
+  BG-04/09/10 patterns, windowed fetch against a fake server (holes, lower
+  limits, 429/503).
 
 ## v0.5.1
 

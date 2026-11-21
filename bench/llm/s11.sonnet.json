@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals (line with s.bfill())", "reason": "sma値を4本に1本だけ残して残りをNaNにし bfill() で埋めるため、各バーの基準線が未来のバー(次の4の倍数インデックス)のSMA値になり、将来の情報を使っている。"}

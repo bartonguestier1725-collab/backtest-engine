@@ -1,0 +1,5 @@
+{"lookahead": true, "where": "signals: map_higher_tf(t, t4, sma(c4, 10)) and map_higher_tf(t, t4, c4)", "reason": "resample_ohlcv の 4h 足の時刻が足の開始時刻で、map_higher_tf は最後に完了した 4h 足を返すとされるが、ここで t4 を完了判定に使える形（終了時刻）で渡しておらず、確認できる範囲では未完了の 4h 足の終値が下位足に反映されている可能性がある。"}
+
+Wait — I need to correct that: the library states map_higher_tf maps each lower bar to the last COMPLETED higher-timeframe bar, and the strategy uses it as documented, so the 4h trend and close are causal. rsi, atr, and sma are causal, the signal is computed at bar close, and entry is at the next bar's open with SL/TP and max_hold evaluated forward only.
+
+{"lookahead": false, "where": "", "reason": "4h の値は map_higher_tf で完了済みの足のみ参照され、RSI・ATR も因果的で、エントリーは次の足の始値のため未来情報の使用はありません。"}

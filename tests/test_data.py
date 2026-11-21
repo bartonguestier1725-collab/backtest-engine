@@ -9,6 +9,15 @@ import numpy as np
 import pytest
 
 from backtest_engine.data import fetch_aggvault, _iso_to_epoch
+import backtest_engine.data as _data
+
+
+@pytest.fixture(autouse=True)
+def _no_pacing_between_tests():
+    """Request pacing is shared across calls; start each test fresh."""
+    _data._LAST_REQUEST[0] = 0.0
+    yield
+    _data._LAST_REQUEST[0] = 0.0
 
 
 # ── _iso_to_epoch ────────────────────────────────────────────────────
@@ -63,7 +72,8 @@ class TestFetchAggvaultValidation:
     def test_valid_timeframes_4h_1d(self):
         """4h and 1d are valid timeframes since AggVault v2."""
         bars = [{"time": 1617235200, "open": 1.17, "high": 1.18, "low": 1.16, "close": 1.175}]
-        with patch("urllib.request.urlopen", return_value=_mock_response(bars)):
+        with patch("urllib.request.urlopen", return_value=_mock_response(bars)), \
+                patch("backtest_engine.data._sleep"):
             for tf in ("4h", "1d"):
                 result = fetch_aggvault("EURUSD", tf, "2021-04-01", "2021-04-02", api_key="tk_x")
                 assert len(result[0]) == 1
@@ -334,10 +344,57 @@ class TestFetchAggvaultWindows:
             fetch_aggvault("EURUSD", "1h", "2021-01-01", "2025-12-31", api_key="tk_x")
         assert len(calls) == 1
 
-    def test_empty_early_window_is_skipped(self):
-        urlopen, calls = _fake_server(data_from=1717200000)   # data starts 2024-06-01
+    def test_empty_early_window_is_skipped_with_warning(self):
+        from backtest_engine import DataQualityWarning
+        urlopen, calls = _fake_server(data_from=1719792000)   # data starts 2024-07-01
+        with patch("urllib.request.urlopen", new=urlopen), \
+                patch("backtest_engine.data._sleep"), \
+                pytest.warns(DataQualityWarning, match="no 1m bars for 1 of 3"):
+            ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
+        assert ts[0] == 1719792000
+        assert np.all(np.diff(ts) == 60)
+
+    def test_limit_is_sent(self):
+        urlopen, calls = _fake_server(step=3600)
+        seen = []
+        def spy(req, timeout=None):
+            seen.append(req.full_url)
+            return urlopen(req, timeout)
+        with patch("urllib.request.urlopen", new=spy):
+            fetch_aggvault("EURUSD", "1h", "2024-01-01", "2024-01-02", api_key="tk_x")
+        assert "&limit=500000" in seen[0]
+
+    def test_interior_404_window_warns(self):
+        from backtest_engine import DataQualityWarning
+        urlopen, _ = _fake_server()
+        def holey(req, timeout=None):
+            if "from=1719619200" in req.full_url:        # window 2 (from 2024-06-29)
+                raise _mock_http_error(404)
+            return urlopen(req, timeout)
+        with patch("urllib.request.urlopen", new=holey), \
+                patch("backtest_engine.data._sleep"), \
+                pytest.warns(DataQualityWarning, match="2024-06-29"):
+            ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
+        assert len(ts) == 366 * 1440 - 180 * 1440
+
+    def test_lower_server_limit_is_not_silent(self):
+        """A server that cuts replies below our assumed limit (without
+        rejecting the limit parameter) still yields complete data."""
+        urlopen, calls = _fake_server(limit=100_000)
         with patch("urllib.request.urlopen", new=urlopen), \
                 patch("backtest_engine.data._sleep"):
             ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
-        assert ts[0] == 1717200000
+        # interior windows continue; the last window may be cut (no way to
+        # tell an early data end from a cut there), so check the first two
         assert np.all(np.diff(ts) == 60)
+        assert ts[0] == 1704067200
+        assert ts[-1] >= 1704067200 + 360 * 86400 - 60
+
+    def test_503_is_retried(self):
+        bars = [{"time": 1617235200, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}]
+        with patch("urllib.request.urlopen",
+                   side_effect=[_mock_http_error(503), _mock_response(bars)]), \
+                patch("backtest_engine.data._sleep") as slept:
+            ts, *_ = fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
+        assert list(ts) == [1617235200]
+        assert slept.call_count == 1

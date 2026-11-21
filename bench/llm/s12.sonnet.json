@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals(): c4 = c.resample(\"4h\").last() と up4 = (c4 > trend4).reindex(idx, method=\"ffill\")", "reason": "4時間足は開始時刻でラベル付けされ、その区間の最後の終値と移動平均を含むため、ffill で区間内の各下位足に未完了の4時間足の値（将来の終値）が渡り、map_higher_tf のような直前の完了済み足へのずらしがない。"}

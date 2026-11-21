@@ -27,11 +27,12 @@ def generate_synthetic_data(n_bars=5000, seed=42):
     returns = np.random.randn(n_bars) * 0.001 + 0.00005
     close = 1.10000 + np.cumsum(returns)
 
-    # Generate realistic OHLC from close
+    # Each bar opens near the previous close; its range contains the open
+    # and the close, as in real OHLC data.
+    open_price = np.r_[close[0], close[:-1]] + np.random.randn(n_bars) * 0.00002
     spread = np.abs(np.random.randn(n_bars)) * 0.0003
-    high = close + spread
-    low = close - spread
-    open_price = close + np.random.randn(n_bars) * 0.0001
+    high = np.maximum(open_price, close) + spread
+    low = np.minimum(open_price, close) - spread
 
     return high, low, close, open_price
 

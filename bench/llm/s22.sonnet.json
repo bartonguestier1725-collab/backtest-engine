@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals, z = (dev - np.nanmean(dev)) / np.nanstd(dev)", "reason": "z スコアの平均と標準偏差が全サンプル（将来の bar を含む）で計算されており、各 bar の時点では得られない情報を閾値判定に使っている。"}

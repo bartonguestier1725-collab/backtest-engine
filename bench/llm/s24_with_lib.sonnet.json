@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "hires_lib.simulate_trades_hires: exec_signal_bars = np.searchsorted(exec_timestamps, signal_times, side=\"left\")", "reason": "signal_times は 1h 足の始値時刻のままで、signal_bar_minutes を足して足の終値時刻にしていないため、1h 足が確定する約59分前の1分足（その時間の2分目の始値）でエントリーしており、その足の終値で決まる RSI/ATR シグナルを先取りしている。"}

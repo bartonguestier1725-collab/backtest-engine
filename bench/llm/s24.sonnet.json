@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "RSI と ATR は 1h 足の確定した終値までで計算した因果的な指標で、simulate_trades_hires は signal_bar_minutes=60 により 1h 足の終了後から 1m 足で約定するため、未来の情報は使っていない。"}

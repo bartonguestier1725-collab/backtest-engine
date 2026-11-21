@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals (log mean, rfft/irfft over the entire close series)", "reason": "全期間の平均除去とFFTによる低周波フィルタは全サンプルを使うため、各バーのcycleとturnが将来の価格に依存している。"}

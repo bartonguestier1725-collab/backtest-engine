@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "backtest: `weak = np.r_[c[1:] < c[:-1], False]` passed as exit_signals", "reason": "weak[i] is True when close[i+1] < close[i], so the custom exit at bar i's close is triggered by the next bar's close, which is a future price not known at that bar."}

@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals (filtfilt on line `smooth = filtfilt(b, a, c)`)", "reason": "filtfilt は前向き・後ろ向きの両方向にフィルタをかける零位相フィルタで、各バーの smooth とその傾きが将来の終値に依存するため、バー終値時点では得られない情報をシグナルに使っている。"}

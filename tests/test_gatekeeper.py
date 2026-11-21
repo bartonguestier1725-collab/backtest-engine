@@ -84,8 +84,9 @@ class TestGate0:
             source_path=str(src),
         )
         trades, sl, close = _sim_trades()
+        ts = np.arange(len(close), dtype=np.int64) * 60
         result = gk.gate0_validate(trades=trades, sl_distances=sl,
-                                   avg_price=float(np.median(close)))
+                                   avg_price=float(np.median(close)), timestamps=ts)
         assert result.passed
         output = capsys.readouterr().out
         assert "INCOMPLETE" not in output
@@ -139,19 +140,43 @@ class TestGate0TradeChecks:
         self._gk().gate0_validate(trades=trades, sl_distances=sl,
                                   avg_price=float(np.median(close)))
         out = capsys.readouterr().out
-        for cid in ("BG-01", "BG-06b", "BG-08", "BG-09b", "BG-12", "BG-14"):
+        for cid in ("BG-06b", "BG-08", "BG-09b", "BG-12", "BG-14"):
             assert f"{cid}:" in out, cid
+        assert "BG-01:" not in out  # tautological for engine output
 
     def test_missing_trades_is_reported(self, capsys):
         self._gk().gate0_validate()
-        assert "trades (BG-01/06b/08/09b/12 skipped)" in capsys.readouterr().out
+        assert "trades (BG-06b/08/09b/12 skipped)" in capsys.readouterr().out
 
-    def test_look_ahead_in_trades_blocks(self):
-        trades, sl, _ = _sim_trades()
-        bad = trades.copy()
-        bad["signal_bar"] = bad["entry_bar"]  # e.g. a broken time mapping
-        with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
-            self._gk().gate0_validate(trades=bad)
+    def test_overlapping_1h_trades_warn_not_block(self, capsys):
+        """Independent trades often overlap; that is not a same-bar re-entry
+        bug (review of v0.6.0: Gate 0 raised on ordinary 1h RSI results)."""
+        from backtest_engine import simulate_trades, rsi, atr
+        rng = np.random.default_rng(1)
+        n = 20_000
+        close = 100 * np.exp(np.cumsum(rng.normal(0, 0.002, n)))
+        open_ = np.r_[close[0], close[:-1]]
+        high = np.maximum(open_, close) * 1.001
+        low = np.minimum(open_, close) * 0.999
+        r = rsi(close, 14); a = atr(high, low, close, 14)
+        sb = np.flatnonzero(((r < 30) | (r > 70)) & ~np.isnan(a))
+        sb = sb[sb < n - 1].astype(np.int32)
+        d = np.where(r[sb] < 30, 1, -1).astype(np.int8)
+        trades = simulate_trades(high, low, close, sb, d, a[sb] * 2, a[sb] * 4,
+                                 max_hold=48, open_prices=open_)
+        gk = GateKeeper(strategy_name="t", n_bars=n, bar_minutes=60)
+        result = gk.gate0_validate(trades=trades, sl_distances=a[sb] * 2,
+                                   avg_price=float(np.median(close)))
+        assert result.passed
+        assert "OVERLAPPING TRADES" in capsys.readouterr().out
+
+    def test_entry_mode_inferred_when_metadata_lost(self, capsys):
+        trades, _, _ = _sim_trades(open_entry=False)
+        plain = np.concatenate([np.asarray(trades[:60]), np.asarray(trades[60:])])
+        assert getattr(plain, "quality", None) is None
+        result = self._gk().gate0_validate(trades=plain)
+        assert result.passed
+        assert "BG-09b" in capsys.readouterr().out
 
     def test_close_entry_is_warned_not_blocked(self, capsys):
         trades, _, _ = _sim_trades(open_entry=False)

@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals (lstsq fit on y = next-bar return, and np.std(pred[10:]))", "reason": "線形回帰を全サンプルで当てはめており、将来リターンを目的変数に使った係数と全期間の標準偏差でしきい値を決めるため、各バーのシグナルが将来情報に依存している。"}
