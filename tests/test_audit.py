@@ -1,6 +1,7 @@
 """Tests for backtest_engine.audit — look-ahead and null-data tests."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -498,6 +499,43 @@ class TestAuditStrategyIsolation:
 class TestAuditStrategyIsolationEdges:
     CLEAN = TestStrategyFile.CLEAN
 
+    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX signals")
+    def test_interrupt_kills_the_child(self, tmp_path):
+        import os, signal, subprocess, sys, time
+        marker = tmp_path / "pid.txt"
+        f = tmp_path / "s.py"
+        f.write_text("import os, time\n"
+                     f"open({str(tmp_path / 'child.txt')!r}, 'w').write(str(os.getpid()))\n"
+                     "def signals(data):\n    time.sleep(120)\n")
+        runner = tmp_path / "run.py"
+        runner.write_text("from backtest_engine.audit import audit_strategy\n"
+                          f"audit_strategy({str(f)!r}, n_cuts=8, n_paths=10)\n")
+        parent = subprocess.Popen([sys.executable, str(runner)])
+        child_file = tmp_path / "child.txt"
+        for _ in range(100):
+            if child_file.exists() and child_file.read_text():
+                break
+            time.sleep(0.1)
+        child = int(child_file.read_text())
+        parent.send_signal(signal.SIGINT)
+        parent.wait(timeout=30)
+        time.sleep(0.5)
+        try:
+            os.kill(child, 0)
+            alive = "State:\tZ" not in Path(f"/proc/{child}/status").read_text()
+        except (ProcessLookupError, OSError):
+            alive = False
+        assert not alive
+
+    def test_numba_cache_reused_between_calls(self, tmp_path):
+        import time
+        f = tmp_path / "strat.py"
+        f.write_text(self.CLEAN)
+        audit_strategy(f, n_cuts=8, n_paths=10)            # warm the cache
+        t0 = time.time()
+        audit_strategy(f, n_cuts=8, n_paths=10)
+        assert time.time() - t0 < 2.5
+
     def test_current_folder_cannot_shadow_the_library(self, tmp_path, monkeypatch):
         fake = tmp_path / "cwd" / "backtest_engine"
         fake.mkdir(parents=True)
@@ -559,4 +597,9 @@ class TestAuditStrategyIsolationEdges:
             alive = True
         except ProcessLookupError:
             alive = False
+        if alive:  # a killed but unreaped (zombie) process still answers kill(0)
+            try:
+                alive = "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+            except OSError:
+                alive = False
         assert not alive

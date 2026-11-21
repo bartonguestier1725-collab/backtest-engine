@@ -677,36 +677,64 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
             cmd += ["--data-pkl", str(pkl)]
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
-        # Run this copy of the library: expose only the backtest_engine package
-        # (via a link in the temp dir), not its parent folder.
+        # Empty or relative PYTHONPATH entries would put the cwd back.
+        if env.get("PYTHONPATH"):
+            keep = [x for x in env["PYTHONPATH"].split(os.pathsep) if x and os.path.isabs(x)]
+            if keep:
+                env["PYTHONPATH"] = os.pathsep.join(keep)
+            else:
+                env.pop("PYTHONPATH")
+        # Run this copy of the library: load the package from its real path
+        # (so numba's on-disk cache, keyed by file path, is reused), then run
+        # the CLI. -P keeps the current folder off the child's sys.path.
         pkg = Path(__file__).resolve().parent
-        link_dir = Path(tmp) / "lib"
-        link_dir.mkdir()
-        try:
-            (link_dir / pkg.name).symlink_to(pkg, target_is_directory=True)
-            extra = str(link_dir)
-        except OSError:  # no symlinks (e.g. Windows without privileges)
-            extra = None if _installed(__file__) else str(pkg.parent)
-        if extra:
-            env["PYTHONPATH"] = extra + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        boot = (
+            "import sys, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('backtest_engine', {str(pkg / '__init__.py')!r}, "
+            f"submodule_search_locations=[{str(pkg)!r}])\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "sys.modules['backtest_engine'] = mod\n"
+            "spec.loader.exec_module(mod)\n"
+            "from backtest_engine.audit import main\n"
+            "sys.exit(main(sys.argv[1:]))\n"
+        )
+        cmd = [sys.executable, "-P", "-c", boot] + cmd[4:]
+        err_path = Path(tmp) / "stderr.txt"
         popen_kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
                     if os.name == "nt" else {"start_new_session": True})
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                encoding="utf-8", errors="replace", env=env, **popen_kw)
-        try:
-            _, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+
+        def kill_group() -> None:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
             else:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)  # the child and anything it started
-                except ProcessLookupError:
+                except OSError:
                     pass
-            _, stderr = proc.communicate()
-            return _report(path, [AuditResult(
-                "strategy_file", "error", f"the audit did not finish within {timeout} s",
-                {"stderr": (stderr or "")[-2000:]})], seed)
+
+        def stderr_tail() -> str:
+            try:
+                return err_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+            except OSError:
+                return ""
+
+        with open(err_path, "w", encoding="utf-8") as err_fh:
+            # No pipes: a strategy that keeps them open cannot make us wait.
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=err_fh, env=env, **popen_kw)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_group()
+                proc.wait()
+                return _report(path, [AuditResult(
+                    "strategy_file", "error", f"the audit did not finish within {timeout} s",
+                    {"stderr": stderr_tail()})], seed)
+            except BaseException:  # Ctrl-C, SystemExit, ...: do not leave the child running
+                kill_group()
+                proc.wait()
+                raise
+        stderr = stderr_tail()
         if out.exists():
             try:
                 rep = json.loads(out.read_text(encoding="utf-8"))
