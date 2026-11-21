@@ -600,14 +600,18 @@ def _audit_in_process(path: Path, data, n_cuts: int, n_paths: int, seed: int,
     return _report(path, results)
 
 
-def _report(path, results: list[AuditResult]) -> dict:
+def _report(path, results: list[AuditResult], seed: Optional[int] = None) -> dict:
     order = {"fail": 0, "error": 1, "warn": 2, "pass": 3}
     overall = min((r.verdict for r in results), key=order.__getitem__)
-    return {"file": str(path), "overall": overall, "results": [r.to_dict() for r in results]}
+    rep = {"file": str(path), "overall": overall, "results": [r.to_dict() for r in results]}
+    if seed is not None:
+        rep["seed"] = int(seed)
+    return rep
 
 
 def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 120,
-                   seed: int = 0, rtol: float = 1e-9, isolate: bool = True) -> dict:
+                   seed: Optional[int] = 0, rtol: float = 1e-9, isolate: bool = True,
+                   timeout: Optional[float] = None) -> dict:
     """Run every applicable test on a strategy file.
 
     The file defines ``signals(data)`` (for the look-ahead test) and/or
@@ -619,30 +623,62 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     resampled to coarser signal bars inside the strategy).
 
     With ``isolate=True`` (default) the audit runs in a fresh Python process
-    (``python -m backtest_engine.audit``), so strategy files and their
-    helpers never meet another audit's modules or the caller's.
+    (``python -m backtest_engine.audit``, using this copy of the library), so
+    strategy files and their helpers never meet another audit's modules or
+    the caller's. That costs about a second per call, and ``data`` is copied
+    to a temporary file. ``isolate=False`` runs in this process and reuses any
+    module the caller already imported under the same name. ``seed=None``
+    picks a random seed (reported in ``seed``). ``timeout`` (seconds) turns a
+    hanging strategy into an ``error`` report.
     """
     path = Path(path)
+    if seed is None:
+        seed = int(np.random.default_rng().integers(2**31))
+    if data is not None:
+        try:
+            data = _as_data(data)
+        except (ValueError, TypeError, IndexError) as e:
+            return _report(path, [AuditResult("data", "error", f"bad data: {e}")], seed)
     if not isolate:
-        return _audit_in_process(path, data, n_cuts, n_paths, seed, rtol)
+        rep = _audit_in_process(path, data, int(n_cuts), int(n_paths), int(seed), float(rtol))
+        rep["seed"] = int(seed)
+        return rep
+    import os
+    import pickle
     import subprocess
     import tempfile
     with tempfile.TemporaryDirectory(prefix="bt_audit_") as tmp:
         out = Path(tmp) / "report.json"
         cmd = [sys.executable, "-m", "backtest_engine.audit", str(path.resolve()),
-               "--json-out", str(out), "--cuts", str(n_cuts), "--paths", str(n_paths),
-               "--seed", str(seed), "--rtol", repr(rtol)]
+               "--json-out", str(out), "--cuts", str(int(n_cuts)), "--paths", str(int(n_paths)),
+               "--seed", str(int(seed)), "--rtol", repr(float(rtol))]
         if data is not None:
-            npz = Path(tmp) / "data.npz"
-            np.savez(npz, **_as_data(data))
-            cmd += ["--data-npz", str(npz)]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+            pkl = Path(tmp) / "data.pkl"
+            with open(pkl, "wb") as fh:
+                pickle.dump(data, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            cmd += ["--data-pkl", str(pkl)]
+        env = dict(os.environ)
+        lib_root = str(Path(__file__).resolve().parents[1])  # run this copy of the library
+        env["PYTHONPATH"] = lib_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", env=env, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return _report(path, [AuditResult(
+                "strategy_file", "error", f"the audit did not finish within {timeout} s")], seed)
         if out.exists():
-            return json.loads(out.read_text())
+            try:
+                rep = json.loads(out.read_text(encoding="utf-8"))
+                rep["file"] = str(path)
+                rep["seed"] = int(seed)
+                return rep
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
     return _report(path, [AuditResult(
         "strategy_file", "error",
         f"the audit process exited with code {proc.returncode} without a report",
-        {"stderr": proc.stderr[-2000:]})])
+        {"stderr": proc.stderr[-2000:]})], seed)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -658,18 +694,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--rtol", type=float, default=1e-9,
                     help="relative tolerance for float signals (default 1e-9)")
     ap.add_argument("--json-out", help=argparse.SUPPRESS)   # used by audit_strategy
-    ap.add_argument("--data-npz", help=argparse.SUPPRESS)   # used by audit_strategy
+    ap.add_argument("--data-pkl", help=argparse.SUPPRESS)   # used by audit_strategy
     a = ap.parse_args(argv)
     data = None
     if a.csv:
         from backtest_engine.utils import load_ohlcv
         data = load_ohlcv(a.csv)
-    elif a.data_npz:
-        with np.load(a.data_npz) as z:
-            data = {k: z[k] for k in z.files}
+    elif a.data_pkl:
+        import pickle
+        with open(a.data_pkl, "rb") as fh:  # written by audit_strategy in a private temp dir
+            data = pickle.load(fh)
     report = _audit_in_process(Path(a.strategy), data, a.cuts, a.paths, a.seed, a.rtol)
+    report["seed"] = a.seed
     if a.json_out:
-        Path(a.json_out).write_text(json.dumps(report, ensure_ascii=False))
+        Path(a.json_out).write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
     if a.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     elif not a.json_out:

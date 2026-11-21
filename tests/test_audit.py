@@ -445,3 +445,51 @@ def backtest(data):
         code = main([str(f), "--json"])
         out = json.loads(capsys.readouterr().out)
         assert code == 2 and out["overall"] == "error"
+
+
+class TestAuditStrategyIsolation:
+    CLEAN = TestStrategyFile.CLEAN
+
+    def _file(self, tmp_path, body=None, name="strat.py"):
+        f = tmp_path / name
+        f.write_text(self.CLEAN if body is None else body)
+        return f
+
+    def test_isolated_equals_in_process(self, tmp_path):
+        f = self._file(tmp_path)
+        a = audit_strategy(f, n_cuts=8, n_paths=10)
+        b = audit_strategy(f, n_cuts=8, n_paths=10, isolate=False)
+        strip = lambda rep: [(r["check"], r["verdict"], r["summary"]) for r in rep["results"]]
+        assert strip(a) == strip(b)
+        assert a["file"] == b["file"] == str(f)
+
+    def test_argument_types(self, tmp_path):
+        f = self._file(tmp_path)
+        rep = audit_strategy(f, n_cuts=np.int64(8), n_paths=np.int64(10), rtol=np.float64(1e-9),
+                             seed=None)
+        assert rep["overall"] == "pass" and isinstance(rep["seed"], int)
+
+    def test_data_with_object_and_odd_columns(self, tmp_path):
+        f = self._file(tmp_path)
+        d = random_walk_bars(2000, seed=1)
+        d["file"] = np.arange(2000)
+        d["label"] = np.array(["x"] * 2000, dtype=object)
+        d["time"] = d["time"].astype("datetime64[s]")
+        assert audit_strategy(f, data=d, n_cuts=8, n_paths=10)["overall"] == "pass"
+
+    def test_bad_data_is_error_report(self, tmp_path):
+        f = self._file(tmp_path)
+        rep = audit_strategy(f, data={"close": np.ones(10)}, n_cuts=8, n_paths=10)
+        assert rep["overall"] == "error" and rep["results"][0]["check"] == "data"
+
+    def test_noisy_and_non_ascii_strategy(self, tmp_path):
+        body = ("import sys\nsys.stdout.buffer.write(b'\\xff\\xfe')\nsys.stdout.flush()\n"
+                "def signals(data):\n    raise ValueError('日本語のエラー')\n")
+        rep = audit_strategy(self._file(tmp_path, body), n_cuts=8, n_paths=10)
+        assert rep["overall"] == "error"
+        assert any("日本語のエラー" in r["summary"] for r in rep["results"])
+
+    def test_timeout_is_error_report(self, tmp_path):
+        body = "import time\ndef signals(data):\n    time.sleep(60)\n"
+        rep = audit_strategy(self._file(tmp_path, body), n_cuts=8, n_paths=10, timeout=10)
+        assert rep["overall"] == "error" and "did not finish" in rep["results"][-1]["summary"]
