@@ -16,7 +16,7 @@ Two tests, both independent of what the strategy code looks like:
    continuous (Brownian bridge) path between its open and close, so a stop or
    target inside [low, high] was really touched and fills at its level fairly.
    The expected PnL before costs is then zero, minus a small pessimistic bias
-   from the SL-first rule when a bar touches both SL and TP. The same trades
+   from the SL-first rule when a bar touches both SL and TP. The same entries
    are also run with coin-flip directions (inside simulate_trades, with the
    SL/TP distances unchanged), which keeps that bias and removes any
    information in the directions.
@@ -485,9 +485,9 @@ def check_null_edge(
             return AuditResult(
                 "null_edge", "warn",
                 f"LOSS ON RANDOM DATA from the fill rules: {mean:+.3f}R per trade (t={t_raw:.1f}), "
-                f"about the same as with coin-flip directions. Usually bars often touch both SL "
-                f"and TP, and the SL-first rule makes this backtest pessimistic: re-run with "
-                f"simulate_trades_hires (1m fills) before trusting the result. (Only costs "
+                f"about the same as with coin-flip directions. The usual cause: bars often touch "
+                f"both SL and TP, and the SL-first rule makes this backtest pessimistic; re-run "
+                f"with simulate_trades_hires (1m fills) before trusting the result. (Only costs "
                 f"passed as entry_costs are added back; costs subtracted from pnl_r by hand "
                 f"also show up as this loss.)", details)
         return AuditResult(
@@ -497,11 +497,14 @@ def check_null_edge(
             f"before the bar whose close produced the signal), or the SL-first rule biases "
             f"this backtest (bars often touch both SL and TP; then re-run with "
             f"simulate_trades_hires)." + (
-                f" The same entries with coin-flip directions lose clearly less "
-                f"({details['placebo_mean_r_per_trade']:+.3f}R), so the fill rules do not explain it."
+                f" The same entries with coin-flip directions do not lose significantly "
+                f"({details['placebo_mean_r_per_trade']:+.3f}R, t={t_plc:.1f}), so the fill "
+                f"rules are unlikely to explain it."
                 if t_plc is not None else
                 " The coin-flip comparison that tells them apart needs the backtest to use "
-                "backtest_engine's simulate_trades."), details)
+                "backtest_engine's simulate_trades.")
+            + " (Only costs passed as entry_costs are added back; costs subtracted from "
+              "pnl_r by hand also show up as a loss.)", details)
     return AuditResult(
         "null_edge", "pass",
         f"No edge on random data: {mean:+.3f}R per trade before costs (t={t_raw:.1f} across "
@@ -510,6 +513,12 @@ def check_null_edge(
 
 
 # ── Strategy files and CLI ──────────────────────────────────────────────────
+
+def _installed(f) -> bool:
+    """True for files of installed packages (e.g. a .venv inside the folder)."""
+    parts = Path(f).parts
+    return "site-packages" in parts or "dist-packages" in parts
+
 
 def _under(f, folder: Path) -> bool:
     try:
@@ -524,16 +533,20 @@ def _strategy_module(path: Path):
     """Import a strategy file as if run with ``python path``: its folder is
     first on sys.path for the whole audit (lazy imports inside functions
     work). Modules cached from elsewhere under a name that this folder
-    provides (``name.py`` or ``name/__init__.py``) are set aside while the
-    audit runs and put back afterwards; every module loaded from the folder is
-    dropped afterwards, so a later audit does not reuse it."""
+    provides (``name.py`` or a ``name/`` package) are set aside while the
+    audit runs and put back afterwards. Every module first loaded from a file
+    under the folder (except installed packages, e.g. a .venv there) is dropped
+    afterwards, so a later audit does not reuse it."""
     path = path.resolve()
     folder = path.parent
     name = f"_audit_target_{path.stem}_{abs(hash(str(path)))}"
+    def provided(mod_name: str) -> bool:  # a module or (namespace) package in folder
+        top = mod_name.split(".")[0]
+        return (folder / f"{top}.py").exists() or (folder / top).is_dir()
+
     set_aside = {}
     for mod_name in list(sys.modules):
-        top = mod_name.split(".")[0]
-        if not ((folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()):
+        if not provided(mod_name):
             continue
         f = getattr(sys.modules[mod_name], "__file__", None)
         if not (f and _under(f, folder)):
@@ -554,10 +567,9 @@ def _strategy_module(path: Path):
         except ValueError:
             pass
         for mod_name in set(sys.modules) - before:
-            top = mod_name.split(".")[0]
-            local = (folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()
             f = getattr(sys.modules.get(mod_name), "__file__", None)
-            if mod_name == name or (local and f and _under(f, folder)):
+            if (mod_name == name or (f and _under(f, folder) and not _installed(f))
+                    or (f is None and provided(mod_name))):  # namespace packages
                 sys.modules.pop(mod_name, None)
         for mod_name, m in set_aside.items():
             sys.modules.setdefault(mod_name, m)

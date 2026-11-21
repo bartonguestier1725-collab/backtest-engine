@@ -111,7 +111,7 @@ with v0.5.x before relying on them.
   signals are tested; float noise is tolerated with `rtol`). `check_null_edge`
   runs the whole backtest on 120 driftless random walks whose bar extremes
   come from a Brownian bridge (fair stop/target fills), tests the mean R
-  before costs with paths as clusters, and compares with the same trades
+  before costs with paths as clusters, and compares with the same entries
   under coin-flip directions (flipped inside `simulate_trades` in the
   auditing thread, SL/TP distances unchanged). On a labeled benchmark of 28
   strategies (`bench/`), the two together caught all 16 planted leaks with

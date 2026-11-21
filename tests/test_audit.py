@@ -239,15 +239,30 @@ class TestNullEdge:
                                   exec_timestamps=ts_1m, exec_opens=o, exec_highs=h, exec_lows=l,
                                   exec_closes=c)
         assert len(calls) == 1
-        np.testing.assert_array_equal(calls[0], dirs)          # flipped inside, once
+        np.testing.assert_array_equal(calls[0], dirs)          # hires passes them on as given
+        monkeypatch.setattr(core, "simulate_trades", real_sim)
+        kw = dict(signal_timestamps=ts_1h, signal_bars=np.arange(5, 85, 2, dtype=np.int32),
+                  directions=dirs, sl_distances=np.full(40, 0.002), tp_distances=np.full(40, 0.004),
+                  max_hold=5, signal_bar_minutes=60, exec_timestamps=ts_1m, exec_opens=o,
+                  exec_highs=h, exec_lows=l, exec_closes=c)
+        plain = np.asarray(simulate_trades_hires(**kw)["pnl_r"])
+        with _coin_flip_directions(np.random.SeedSequence(3)):
+            flipped = np.asarray(simulate_trades_hires(**kw)["pnl_r"])
+        flips = np.random.default_rng(np.random.SeedSequence(3)).choice(np.array([-1, 1]), 40)
+        assert not np.array_equal(plain, flipped)
+        # trades whose coin came up +1 are unchanged: flipped once, inside simulate_trades
+        np.testing.assert_array_equal(flipped[flips == 1], plain[flips == 1])
 
     def test_seeds_share_no_paths(self):
-        from backtest_engine.audit import random_walk_bars as rw
-        p0 = np.random.SeedSequence(0).spawn(3)
-        p1 = np.random.SeedSequence(1).spawn(3)
-        closes0 = [rw(100, seed=s)["close"] for s in p0]
-        closes1 = [rw(100, seed=s)["close"] for s in p1]
-        assert not any(np.allclose(a, b) for a in closes0 for b in closes1)
+        seen = {0: [], 1: []}
+        def recorder(seed):
+            def bt(d):
+                seen[seed].append(d["close"][:50].copy())
+                return np.random.default_rng(len(seen[seed])).normal(0, 1, 100)
+            return bt
+        for seed in (0, 1):
+            check_null_edge(recorder(seed), n_paths=10, n_bars=200, seed=seed, placebo=False)
+        assert not any(np.allclose(a, b) for a in seen[0] for b in seen[1])
 
     @pytest.mark.parametrize("sl,tp,trail", [(0.5, 3.0, False), (1.0, 20.0, True), (2.0, 3.0, False)])
     def test_causal_tight_stops_and_trailing_pass(self, sl, tp, trail):
@@ -353,6 +368,19 @@ def backtest(data):
         for name, helper in (("a", clean), ("b", leaky)):
             (tmp_path / name / "helperpkg").mkdir(parents=True)
             (tmp_path / name / "helperpkg" / "__init__.py").write_text(helper)
+            (tmp_path / name / "strat.py").write_text(strat)
+        assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
+
+    def test_namespace_helper_folder_not_reused(self, tmp_path):
+        """A helper in a subfolder without __init__.py (review 5)."""
+        leaky = "import numpy as np\ndef sig(c):\n    return np.sign(np.r_[c[1:], c[-1]] - c)\n"
+        clean = ("import numpy as np\nfrom backtest_engine import rsi\n"
+                 "def sig(c):\n    r = rsi(c, 14)\n    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        strat = "from nshelp.impl import sig\ndef signals(data):\n    return sig(data['close'])\n"
+        for name, helper in (("a", clean), ("b", leaky)):
+            (tmp_path / name / "nshelp").mkdir(parents=True)
+            (tmp_path / name / "nshelp" / "impl.py").write_text(helper)
             (tmp_path / name / "strat.py").write_text(strat)
         assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
