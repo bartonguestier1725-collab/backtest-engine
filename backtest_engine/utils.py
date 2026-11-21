@@ -8,6 +8,35 @@ import numpy as np
 import pandas as pd
 
 
+_EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
+
+
+def _to_epoch_seconds(values) -> np.ndarray:
+    """Convert datetimes (strings, datetime64 of any resolution, tz-aware or
+    naive=UTC) or numeric epochs to int64 Unix seconds.
+
+    ``astype(np.int64) // 10**9`` is wrong on pandas >= 3, where datetimes are
+    no longer always nanoseconds (GitHub issue #1).
+    """
+    if isinstance(values, pd.DatetimeIndex):
+        idx = values
+    else:
+        ser = pd.Series(values)
+        if pd.api.types.is_numeric_dtype(ser) and not pd.api.types.is_bool_dtype(ser):
+            v = ser.to_numpy(dtype=np.int64)
+            # Infer the unit from the magnitude (epoch seconds stay < 1e11
+            # until the year 5138): s < 1e11 <= ms < 1e14 <= us < 1e17 <= ns.
+            mag = int(np.max(np.abs(v))) if len(v) else 0
+            for limit, div in ((10**11, 1), (10**14, 10**3), (10**17, 10**6)):
+                if mag < limit:
+                    return v // div
+            return v // 10**9
+        idx = pd.DatetimeIndex(pd.to_datetime(ser, utc=True))
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    return np.asarray((idx - _EPOCH) // pd.Timedelta(seconds=1), dtype=np.int64)
+
+
 def load_ohlcv(
     filepath: str | Path,
     time_col: str = "time",
@@ -23,10 +52,13 @@ def load_ohlcv(
     -------
     (timestamps, open, high, low, close, volume) — all numpy float64/int64 arrays.
     timestamps are Unix epoch in seconds (int64).
+
+    The time column may hold date strings (naive strings are read as UTC;
+    strings with an offset are converted to UTC) or numeric Unix epochs in
+    seconds or milliseconds.
     """
     df = pd.read_csv(filepath)
-    ts = pd.to_datetime(df[time_col])
-    timestamps = (ts.astype(np.int64) // 10**9).values  # ns → seconds
+    timestamps = _to_epoch_seconds(df[time_col])
 
     return (
         timestamps,
@@ -85,7 +117,7 @@ def resample_ohlcv(
         "volume": "sum",
     }).dropna()
 
-    ts_out = (resampled.index.astype(np.int64) // 10**9).values
+    ts_out = _to_epoch_seconds(resampled.index)
     return (
         ts_out,
         resampled["open"].values.astype(np.float64),

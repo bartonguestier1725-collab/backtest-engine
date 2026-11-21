@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades_hires,
-    LONG, SHORT, EXIT_SL, EXIT_TP, EXIT_TIME,
+    LONG, SHORT, EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_NO_FILL,
     rsi, atr,
 )
 
@@ -27,7 +27,7 @@ ts_1h, opens_1h, highs_1h, lows_1h, closes_1h, _ = fetch_aggvault(
 dt_index = pd.to_datetime(ts_1h, unit="s", utc=True)
 print(f"  1h: {len(ts_1h)} bars, {dt_index[0]} → {dt_index[-1]}")
 
-print("Fetching 1m data (execution)...")
+print("Fetching 1m data (execution, ~1 min: 11 requests of 180 days)...")
 ts_1m, opens_1m, highs_1m, lows_1m, closes_1m, _ = fetch_aggvault(
     "EURUSD", "1m", "2021-04-01", "2026-03-31",
 )
@@ -98,7 +98,7 @@ print(f"Recovery:      {results.recovery_factor:.2f}")
 
 # Exit type breakdown
 print(f"\nExit breakdown:")
-for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout")]:
+for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout"), (EXIT_NO_FILL, "No fill")]:
     count = np.sum(results["exit_type"] == exit_type)
     if count > 0:
         subset = pnl[results["exit_type"] == exit_type]

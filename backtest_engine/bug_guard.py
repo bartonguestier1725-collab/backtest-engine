@@ -13,8 +13,14 @@ Incident log (why each check exists):
   BG-07: ATR percentile leak — full-period quantile used (2026-02 earlier)
   BG-08: Same-bar exit+reentry — enter at Open after seeing High/Low for exit (Codex)
   BG-09: Entry at Close — should be Open of next bar (2026-02-28 v1 pre-fix)
-  BG-10: Resampling incomplete bars — last bar may be partial (general)
+  BG-10: Incomplete bars — last bar still forming; unsorted/duplicate timestamps
   BG-11: Spread/cost mismatch — published spread used instead of measured (2026-02-28)
+  BG-12: Fixed cost with ATR-varying SL distances
+  BG-13: Spread filter used live but not in the backtest
+  BG-14: Effectively no SL (2026-04-01 Gold Rollover)
+
+Checks that need trade data (BG-01/06b/08/09b/12/14) only run when the trade
+arrays are passed. ``GateKeeper.gate0_validate(trades=...)`` does this.
 """
 
 from __future__ import annotations
@@ -225,14 +231,17 @@ def check_bfill_in_source(source_path: str | Path) -> CheckResult:
     if not path.exists():
         return CheckResult("BG-04", True, f"File not found: {path}", severity="WARN")
     text = path.read_text()
-    bfill_matches = re.findall(r'\.bfill\(', text)
-    fillna_bfill = re.findall(r"fillna\([^)]*method\s*=\s*['\"]bfill['\"]", text)
-    all_matches = bfill_matches + fillna_bfill
+    bfill_matches = re.findall(r'\.(?:bfill|backfill)\(', text)
+    fillna_bfill = re.findall(
+        r"fillna\([^)]*method\s*=\s*['\"](?:bfill|backfill)['\"]", text)
+    interp_back = re.findall(
+        r"interpolate\([^)]*limit_direction\s*=\s*['\"](?:backward|both)['\"]", text)
+    all_matches = bfill_matches + fillna_bfill + interp_back
     if all_matches:
         return CheckResult(
             "BG-04", False,
-            f"BFILL LEAK: {len(all_matches)} bfill() calls found in {path.name}. "
-            "Use ffill() instead.",
+            f"BFILL LEAK: {len(all_matches)} backward-fill calls (bfill/backfill/"
+            f"interpolate backward) found in {path.name}. Use ffill() instead.",
         )
     return CheckResult("BG-04", True, f"No bfill() in {path.name}")
 
@@ -368,7 +377,7 @@ def check_entry_price_type(source_path: str | Path) -> CheckResult:
     if not path.exists():
         return CheckResult("BG-09", True, f"File not found: {path}", severity="WARN")
     text = path.read_text()
-    # Look for entry_price = ...Close...
+    # Look for entry_price = ...Close...values[ (the original incident: ERROR)
     close_entry = re.findall(
         r'entry_price\s*=.*\bClose\b.*values\s*\[',
         text,
@@ -378,6 +387,21 @@ def check_entry_price_type(source_path: str | Path) -> CheckResult:
             "BG-09", False,
             f"ENTRY AT CLOSE: Found {len(close_entry)} instance(s) of "
             f"entry_price using Close. Use Open of next bar instead.",
+        )
+    # Other spellings (close[i], closes[i], df["close"].iloc[i]) — WARN,
+    # since the pattern is looser. "+ 1]" (next bar) is not flagged.
+    loose = [
+        m.group(0) for m in re.finditer(
+            r'entry_price\s*=\s*[^\n#]*\b[Cc]loses?\b[^\n#]*\[[^\n#]*', text)
+        if not re.search(r'\+\s*1\s*\]', m.group(0))
+    ]
+    if loose:
+        return CheckResult(
+            "BG-09", False,
+            f"POSSIBLE ENTRY AT CLOSE: {len(loose)} line(s) set entry_price from a "
+            f"close price (e.g. {loose[0].strip()[:60]!r}). If the signal uses "
+            f"that close, enter at the next bar's open instead.",
+            severity="WARN",
         )
     return CheckResult("BG-09", True, "Entry price does not use Close")
 
@@ -475,13 +499,39 @@ def check_spread_filter(
 def check_incomplete_bars(
     timestamps: np.ndarray,
     expected_interval_minutes: int = 60,
+    now: Optional[float] = None,
 ) -> CheckResult:
-    """BG-10: Check for incomplete/partial bars at end of data."""
-    if len(timestamps) < 2:
+    """BG-10: Unsorted/duplicate timestamps, or a last bar still forming.
+
+    Parameters
+    ----------
+    timestamps : Bar OPEN times (Unix seconds).
+    expected_interval_minutes : Bar size.
+    now : Current Unix time (default: time.time()). For tests.
+    """
+    ts = np.asarray(timestamps, dtype=np.int64)
+    if len(ts) < 2:
         return CheckResult("BG-10", True, "Too few bars to check")
-    # Check last bar's timestamp vs expected pattern
-    # This is a basic check — more sophisticated checks could verify volume
-    return CheckResult("BG-10", True, "Basic timestamp check passed")
+    n_bad = int(np.sum(np.diff(ts) <= 0))
+    if n_bad:
+        return CheckResult(
+            "BG-10", False,
+            f"UNSORTED TIMESTAMPS: {n_bad} bar(s) are not later than the previous "
+            f"bar (duplicates or out of order). Sort and de-duplicate first.",
+        )
+    if now is None:
+        import time as _time
+        now = _time.time()
+    last_close = int(ts[-1]) + expected_interval_minutes * 60
+    if last_close > now:
+        return CheckResult(
+            "BG-10", False,
+            f"INCOMPLETE LAST BAR: the last {expected_interval_minutes}min bar closes "
+            f"{(last_close - now) / 60:.0f} min from now, so its OHLC is still "
+            f"changing. Drop it before computing signals.",
+            severity="WARN",
+        )
+    return CheckResult("BG-10", True, "Timestamps sorted, last bar complete")
 
 
 def check_min_trades(
@@ -575,6 +625,7 @@ def run_all_checks(
     signal_spreads: Optional[np.ndarray] = None,
     max_spread: float = 0.0,
     avg_price: float = 0.0,
+    timestamps: Optional[np.ndarray] = None,
     strict: bool = True,
     _suppress_print: bool = False,
     **kwargs,
@@ -604,6 +655,7 @@ def run_all_checks(
     max_spread : Maximum spread allowed in price units (for BG-13). 0 = no check.
     avg_price : Representative price level for BG-14 no-SL detection
                 (e.g. median of close). 0 = skip check.
+    timestamps : Bar open times of the data (for BG-10). None = skip.
     strict : If True, assert_passed() is called (raises on ERROR).
     """
     # Backward compat: accept deprecated broker kwarg
@@ -644,6 +696,8 @@ def run_all_checks(
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))
     if n_trades > 0:
         report.results.append(check_min_trades(n_trades, min_trades))
+    if timestamps is not None:
+        report.results.append(check_incomplete_bars(timestamps, bar_minutes))
 
     # API-level entry check
     if open_prices_provided is not None:

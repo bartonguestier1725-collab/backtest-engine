@@ -34,6 +34,25 @@ def _no_trades_run_func(params):
     return None
 
 
+def _sim_trades(n_trades=120, open_entry=True, cost=None):
+    """Run a real simulation on a random walk (trades sorted by entry)."""
+    from backtest_engine import simulate_trades, LONG
+    rng = np.random.default_rng(0)
+    n = 5000
+    close = 100 + np.cumsum(rng.normal(0, 0.1, n))
+    open_ = np.r_[close[0], close[:-1]]
+    high = np.maximum(open_, close) + 0.2
+    low = np.minimum(open_, close) - 0.2
+    sb = np.arange(10, 10 + 40 * n_trades, 40, dtype=np.int32)
+    sl = np.full(n_trades, 1.0) if cost is None else rng.uniform(0.5, 1.5, n_trades)
+    trades = simulate_trades(
+        high, low, close, sb, np.full(n_trades, LONG, dtype=np.int8), sl, sl * 2,
+        max_hold=30, open_prices=open_ if open_entry else None,
+        entry_costs=None if cost is None else np.full(n_trades, cost),
+    )
+    return trades, sl, close
+
+
 # ── Gate 0 Tests ─────────────────────────────────────────────────────────────
 
 class TestGate0:
@@ -64,7 +83,9 @@ class TestGate0:
             expected_costs={"EURUSD": 0.00010},
             source_path=str(src),
         )
-        result = gk.gate0_validate()
+        trades, sl, close = _sim_trades()
+        result = gk.gate0_validate(trades=trades, sl_distances=sl,
+                                   avg_price=float(np.median(close)))
         assert result.passed
         output = capsys.readouterr().out
         assert "INCOMPLETE" not in output
@@ -103,6 +124,63 @@ class TestGate0:
         )
         # Should not raise — BG-05 is now WARN, not ERROR
         gk.gate0_validate()
+
+
+class TestGate0TradeChecks:
+    """Before v0.6.0 gate0_validate() took no trade data, so BG-01/06b/08/09b/
+    12/14 never ran inside the pipeline."""
+
+    def _gk(self, **kw):
+        return GateKeeper(strategy_name="t", n_bars=300_000, bar_minutes=1,
+                          resolution_minutes=1, **kw)
+
+    def test_trade_checks_run(self, capsys):
+        trades, sl, close = _sim_trades()
+        self._gk().gate0_validate(trades=trades, sl_distances=sl,
+                                  avg_price=float(np.median(close)))
+        out = capsys.readouterr().out
+        for cid in ("BG-01", "BG-06b", "BG-08", "BG-09b", "BG-12", "BG-14"):
+            assert f"{cid}:" in out, cid
+
+    def test_missing_trades_is_reported(self, capsys):
+        self._gk().gate0_validate()
+        assert "trades (BG-01/06b/08/09b/12 skipped)" in capsys.readouterr().out
+
+    def test_look_ahead_in_trades_blocks(self):
+        trades, sl, _ = _sim_trades()
+        bad = trades.copy()
+        bad["signal_bar"] = bad["entry_bar"]  # e.g. a broken time mapping
+        with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
+            self._gk().gate0_validate(trades=bad)
+
+    def test_close_entry_is_warned_not_blocked(self, capsys):
+        trades, _, _ = _sim_trades(open_entry=False)
+        result = self._gk().gate0_validate(trades=trades)
+        assert result.passed
+        out = capsys.readouterr().out
+        assert "BG-09b" in out and "BG-01:" not in out
+
+    def test_fixed_cost_with_varying_sl_is_inferred(self, capsys):
+        trades, sl, _ = _sim_trades(cost=0.05)  # same cost_r, SL varies
+        self._gk().gate0_validate(trades=trades, sl_distances=sl)
+        assert "FIXED COST WITH VARYING SL" in capsys.readouterr().out
+
+    def test_low_trade_count_warns(self, capsys):
+        trades, _, _ = _sim_trades(n_trades=20)
+        self._gk().gate0_validate(trades=trades)
+        assert "LOW TRADE COUNT: 20" in capsys.readouterr().out
+
+    def test_sl_length_mismatch_raises(self):
+        trades, sl, _ = _sim_trades()
+        with pytest.raises(ValueError, match="same length"):
+            self._gk().gate0_validate(trades=trades, sl_distances=sl[:-1])
+
+    def test_undeclared_resolution_assumes_bar_minutes(self, capsys):
+        gk = GateKeeper(strategy_name="t", bar_minutes=60)
+        gk.gate0_validate()
+        out = capsys.readouterr().out
+        assert "resolution_minutes (BG-05 assumes 60min" in out
+        assert "COARSE BARS" in out
 
 
 # ── Gate 1 Tests ─────────────────────────────────────────────────────────────
@@ -153,6 +231,31 @@ class TestGate2:
         gk = GateKeeper(strategy_name="test")
         result = gk.gate2_screen(zero_dd, [{}])
         assert result.passed  # RF=inf >= 1.5
+
+    def test_pf_and_rf_from_different_combos_killed(self, capsys):
+        """Best PF and best RF must come from the same combo."""
+        def two_combos(params):
+            return params
+        combos = [
+            {"pf": 1.20, "total_r": 1.0, "n_trades": 100, "max_dd_r": 10.0},  # RF 0.1
+            {"pf": 1.01, "total_r": 30.0, "n_trades": 100, "max_dd_r": 10.0},  # RF 3.0
+        ]
+        gk = GateKeeper(strategy_name="test")
+        result = gk.gate2_screen(two_combos, combos)
+        assert not result.passed
+        assert "0/2 combos meet" in result.message
+
+    def test_best_metric_is_a_qualifying_combo(self, capsys):
+        def f(params):
+            return params
+        combos = [
+            {"pf": 1.50, "total_r": 1.0, "n_trades": 100, "max_dd_r": 10.0},  # RF 0.1
+            {"pf": 1.15, "total_r": 30.0, "n_trades": 100, "max_dd_r": 10.0},  # RF 3.0
+        ]
+        gk = GateKeeper(strategy_name="test")
+        result = gk.gate2_screen(f, combos)
+        assert result.passed
+        assert result.best_metric["pf"] == 1.15
 
     def test_zero_dd_negative_total_killed(self, capsys):
         """max_dd_r=0 but total_r<=0 should give RF=0 → depends on PF."""

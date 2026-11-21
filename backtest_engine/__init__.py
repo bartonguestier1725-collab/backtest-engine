@@ -1,13 +1,13 @@
 """Numba-accelerated backtesting engine for trading strategies."""
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 from backtest_engine._types import (
     LONG, SHORT,
     EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_BE, EXIT_CUSTOM, EXIT_TRAIL, EXIT_NO_FILL,
     TRADE_RESULT_DTYPE,
 )
-from backtest_engine.core import simulate_trades, simulate_trades_hires
+from backtest_engine.core import simulate_trades, simulate_trades_hires, DataQualityWarning
 from backtest_engine.preflight import BacktestQualityWarning, PreflightReport
 from backtest_engine._results import TradeResults
 from backtest_engine.indicators import (
@@ -25,7 +25,7 @@ from backtest_engine.bug_guard import (
     check_resolution, check_data_period, check_same_bar_reentry,
     check_entry_price_type, check_min_trades,
     check_open_prices_provided, check_fixed_cost_usage, check_spread_filter,
-    check_effective_no_sl,
+    check_effective_no_sl, check_incomplete_bars,
 )
 from backtest_engine.gatekeeper import GateKeeper
 from backtest_engine.report import (
@@ -33,7 +33,7 @@ from backtest_engine.report import (
 )
 
 __all__ = [
-    "simulate_trades", "simulate_trades_hires",
+    "simulate_trades", "simulate_trades_hires", "DataQualityWarning",
     "LONG", "SHORT",
     "EXIT_SL", "EXIT_TP", "EXIT_TIME", "EXIT_BE", "EXIT_CUSTOM", "EXIT_TRAIL", "EXIT_NO_FILL",
     "TRADE_RESULT_DTYPE",
@@ -50,6 +50,6 @@ __all__ = [
     "check_resolution", "check_data_period", "check_same_bar_reentry",
     "check_entry_price_type", "check_min_trades",
     "check_open_prices_provided", "check_fixed_cost_usage", "check_spread_filter",
-    "check_effective_no_sl",
+    "check_effective_no_sl", "check_incomplete_bars",
     "generate_report", "ReportConfig", "SummaryCell", "GateRow", "WfaRow", "CscvResult", "Section",
 ]

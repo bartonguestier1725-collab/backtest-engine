@@ -1,5 +1,134 @@
 # Changelog
 
+## v0.6.0
+
+This release fixes several bugs that made results look different from what the
+code would do in a live market. **Results change** for `simulate_trades_hires`,
+for long `fetch_aggvault` 1m/5m/15m requests, for `retrace_pct` entries, and
+(slightly) for any simulation with `open_prices` where a stop was gapped.
+Re-run backtests made with v0.5.x before relying on them.
+
+### Bug fixes (results change)
+
+- **`simulate_trades_hires` look-ahead** — the signal bar was mapped to the
+  first execution bar of the signal bar, so trades entered one execution bar
+  after the signal bar *opened* (with 1h signals and 1m fills: 59 minutes
+  before the 1h close that produced the signal was known). Trades now enter at
+  the open of the first execution bar at or after the signal bar's close.
+  Measured on EURUSD 2024, RSI(14) 30/70, SL 2×ATR / TP 4×ATR, 696 trades,
+  NET with Tradeview ILC costs: PF 0.525 before, 0.908 after (1h fills: 0.898).
+  The README claim "1h-only PF 0.90 vs hires 0.53, a 41% overestimate" was an
+  artifact of this bug and has been removed. The old test that fixed the old
+  mapping (`test_signal_bar_mapping_correct`) now asserts the corrected one.
+- **`fetch_aggvault` silently truncated long ranges** — the API returns at most
+  500,000 bars per request (oldest first, HTTP 200, no flag). For the RSI
+  tutorial (`examples/rsi_reversal/level1_from_api.py`, EURUSD 1m,
+  2021-04-01 – 2026-03-31) the single request ends on 2022-08-02, and
+  replaying those first 500,000 bars, 2,608 of 3,573 signals (73%) come back
+  as `NO_FILL` with zero PnL, without any warning. Long 1m/5m/15m ranges are now fetched in windows (1m: 180 days),
+  paced to the 10 requests/minute limit, with up to 2 retries on HTTP 429. The
+  tutorial now fills all 3,573 signals (1,861,388 1m bars, ~70 s). A windowed
+  fetch of 2024 returned exactly the same bars as the single request.
+- **Stops filled at the stop price through gaps** — with `open_prices`, a stop
+  (SL, breakeven, trailing, SAR hard stop) on a bar that opens beyond it now
+  fills at that open. A gapped stop can lose more than 1R. TP and SAR targets
+  still fill at their price. Without `open_prices` the gap is unknowable and
+  the stop price is used as before. EURUSD 2024 example above, 1h fills,
+  GROSS: PF 0.953 → 0.948.
+- **`retrace_pct` SL measured from the signal close** — the limit fills at
+  `close ∓ retrace_pct × TP`, but the SL was placed `sl_distance` from the
+  signal close. With a retrace deeper than the SL distance, a stop-out showed a
+  profit (e.g. +1.5R). SL and TP are now measured from the fill price, so a
+  stop-out is −1R. The fill bar is no longer skipped: an SL touch on the fill
+  bar is a loss (the price must pass the limit before reaching the stop); TP
+  is not checked on the fill bar, since the high may have come first.
+- **`load_ohlcv` / `resample_ohlcv` returned wrong timestamps on pandas 3**
+  (GitHub issue #1) — `astype(int64) // 10**9` assumed nanosecond datetimes.
+  On pandas 3.0.1, `load_ohlcv` returned 1704067 instead of 1704067200 and
+  `resample_ohlcv` returned 1, 2, … Both now convert any datetime resolution,
+  and `load_ohlcv` also accepts numeric epoch seconds or milliseconds and
+  date strings with UTC offsets.
+- **Gate 2 passed when PF and RF came from different combos** — the best PF
+  and the best RF were checked separately. A grid with one combo at PF 1.2 /
+  RF 0.1 and another at PF 1.01 / RF 3 passed. Now at least one combo must meet
+  both thresholds; `best_metric` is the best-PF combo among those.
+
+### Bug fixes (validation coverage)
+
+- **Gate 0 never ran the trade-level BugGuard checks** — `gate0_validate()`
+  took no trade data, so BG-01, BG-06b, BG-08, BG-09b, BG-12 and BG-14 never
+  ran inside the pipeline (only 6 of the 14 checks could run). It now takes
+  `trades=` (a `TradeResults`), `sl_distances=`, `avg_price=` and
+  `timestamps=`. NO_FILL trades are ignored; BG-12 (fixed cost) is inferred
+  from `cost_r`; BG-01 is skipped for close entry (no `open_prices`), which
+  BG-09b already reports. GK-00 lists every missing input.
+- **`resolution_minutes` defaulted to 1** — a GateKeeper created without it
+  passed BG-05 even for 1h fills. The default is now `None`, which means
+  "same as `bar_minutes`", and GK-00 notes the assumption.
+- **BG-10 always passed** — it was an empty stub. It now reports unsorted or
+  duplicate timestamps (ERROR) and a last bar that is still forming (WARN),
+  and runs when `timestamps=` is passed.
+- **BG-04 missed other backward fills** — now also catches `.backfill(`,
+  `fillna(method="backfill")` and `interpolate(limit_direction="backward"|"both")`.
+- **BG-09 only matched `entry_price = ...Close...values[`** — lowercase and
+  other spellings (`close[i]`, `closes[i]`, `df["close"].iloc[i]`) now give a
+  WARN; next-bar indexing (`[i + 1]`) is not flagged. The original pattern is
+  still an ERROR.
+
+### New
+
+- `TradeResults` has a `signal_bar` field (same timeframe as `entry_bar`).
+  For `simulate_trades_hires` it is the last execution bar inside the signal
+  bar, so `entry_bar > signal_bar` for every filled trade.
+- `DataQualityWarning`: emitted when bars open outside their own high/low
+  (`simulate_trades` with `open_prices`), when signals close outside the
+  execution data, or when a gap in the execution data delays an entry
+  (`simulate_trades_hires`). `simulate_trades_hires` now also rejects
+  unsorted execution timestamps.
+- `check_incomplete_bars` is exported.
+- `results.quality` is set even with `preflight=False` (only the warning is
+  suppressed). Previously it was `None`.
+- `examples/rsi_reversal/compare_1h_vs_hires.py` reproduces the README table.
+
+### Docs
+
+- README: fill rules, hires timing, corrected hires numbers, Gate 0/2
+  behavior, BugGuard check list (BG-01–BG-14), what BugGuard cannot detect
+  (look-ahead inside signal code), fetch windowing, StressTest "combined"
+  scenario values, test count. Removed the Grade C description (grades are A/B
+  since v0.5.1) and the undefined `entry_costs`/unused `BrokerCost` in the
+  hires example.
+- `examples/gatekeeper_pipeline.py`: synthetic bars now open near the previous
+  close and inside their own range (the old generator put opens outside
+  high/low, which the gap rule turns into large losses); Gate 0 gets a
+  simulation result.
+
+### Tests
+
+- 343 → 408. New: `tests/test_fills.py` (gap and retrace fills),
+  `tests/test_utils.py` (`load_ohlcv`, `resample_ohlcv`, `find_signal_bar`),
+  hires timing and coverage, Gate 0 trade checks, Gate 2 same-combo rule,
+  BG-04/09/10 patterns, windowed fetch against a fake server.
+
+## v0.5.1
+
+Written in v0.6.0 from the commit history (2026-04-01 – 2026-04-27); this
+version was not recorded at the time.
+
+- `simulate_trades_hires()` for 1h signals with 1m fills (its entry timing was
+  wrong until v0.6.0, see above).
+- `fetch_aggvault()` (AggVault API), with 4h/1d timeframes, inclusive end
+  date and symbol normalization. Examples moved from CSV paths to it.
+- BG-14 (effectively no SL), `BrokerCost.pip_size` / `price_to_pips`.
+- `strategy_builder` for time-based entry/exit signals; `rsi` indicator;
+  RSI reversal tutorial (levels 1–4) and gold rollover examples.
+- BG-05 downgraded from ERROR to WARN for 1h resolution.
+- GROSS (no costs) is the default in examples; the pre-flight grade depends
+  only on `open_prices` (A/B; Grade C removed).
+- HTML report generator (`generate_report`), with escaping fixes and the
+  equity curve sorted by exit bar.
+- `matplotlib` added to dependencies (CI failure).
+
 ## v0.5.0
 
 ### New features

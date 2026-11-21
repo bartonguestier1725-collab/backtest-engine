@@ -169,7 +169,7 @@ class TestFetchAggvaultHTTP:
             fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
 
         req = mock_open.call_args[0][0]
-        assert req.get_header("User-agent") == "backtest-engine/0.5.1"
+        assert req.get_header("User-agent") == "backtest-engine/0.6.0"
 
     def test_authorization_header_set(self):
         with patch("urllib.request.urlopen", return_value=_mock_response(self.SAMPLE_BARS)) as mock_open:
@@ -246,9 +246,20 @@ class TestFetchAggvaultErrors:
                 fetch_aggvault("NZDJPY", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
 
     def test_429_raises_with_retry_message(self):
-        with patch("urllib.request.urlopen", side_effect=_mock_http_error(429)):
+        with patch("urllib.request.urlopen", side_effect=_mock_http_error(429)) as m, \
+                patch("backtest_engine.data._sleep") as slept:
             with pytest.raises(RuntimeError, match="Rate limited"):
                 fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
+        assert m.call_count == 3          # 1 try + 2 retries
+        assert slept.call_count == 2
+
+    def test_429_then_success(self):
+        bars = [{"time": 1617235200, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}]
+        with patch("urllib.request.urlopen",
+                   side_effect=[_mock_http_error(429), _mock_response(bars)]), \
+                patch("backtest_engine.data._sleep"):
+            ts, *_ = fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
+        assert list(ts) == [1617235200]
 
     def test_500_raises_with_code(self):
         with patch("urllib.request.urlopen", side_effect=_mock_http_error(500, "Internal Server Error")):
@@ -264,3 +275,69 @@ class TestFetchAggvaultErrors:
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection refused")):
             with pytest.raises(RuntimeError, match="Cannot reach AggVault"):
                 fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
+
+
+# ── fetch_aggvault — windowed requests (server returns <= 500k bars) ─────
+
+def _fake_server(limit=500_000, step=60, data_from=None):
+    """urlopen stand-in that serves 1m bars for [from, to], oldest first,
+    truncated to `limit` like the real server."""
+    import urllib.parse
+    calls = []
+
+    def urlopen(req, timeout=None):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
+        a, b = int(q["from"][0]), int(q["to"][0])
+        calls.append((a, b))
+        start = a if a % step == 0 else a + step - a % step
+        if data_from is not None:
+            start = max(start, data_from)
+        times = range(start, b + 1, step)
+        bars = [{"time": t, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}
+                for _, t in zip(range(limit), times)]
+        return _mock_response(bars)
+    return urlopen, calls
+
+
+class TestFetchAggvaultWindows:
+    def test_long_1m_range_is_split_and_complete(self):
+        urlopen, calls = _fake_server()
+        with patch("urllib.request.urlopen", new=urlopen), \
+                patch("backtest_engine.data._sleep"):
+            ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
+        assert len(calls) == 3                       # 366 days / 180-day windows
+        assert ts[0] == 1704067200                   # 2024-01-01 00:00
+        assert ts[-1] == 1735689540                  # 2024-12-31 23:59
+        assert len(ts) == 366 * 1440
+        assert np.all(np.diff(ts) == 60)
+
+    def test_full_reply_continues_within_window(self):
+        urlopen, calls = _fake_server(limit=1000)    # tiny server limit
+        with patch("urllib.request.urlopen", new=urlopen), \
+                patch("backtest_engine.data._SERVER_LIMIT", 1000), \
+                patch("backtest_engine.data._sleep"):
+            ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-01-02", api_key="tk_x")
+        assert len(ts) == 2 * 1440
+        assert len(calls) == 3                       # 1000 + 1000 + 880
+        assert np.all(np.diff(ts) == 60)
+
+    def test_requests_are_paced(self):
+        urlopen, calls = _fake_server()
+        with patch("urllib.request.urlopen", new=urlopen), \
+                patch("backtest_engine.data._sleep") as slept:
+            fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
+        assert slept.call_count == len(calls) - 1
+
+    def test_1h_is_one_request(self):
+        urlopen, calls = _fake_server(step=3600)
+        with patch("urllib.request.urlopen", new=urlopen):
+            fetch_aggvault("EURUSD", "1h", "2021-01-01", "2025-12-31", api_key="tk_x")
+        assert len(calls) == 1
+
+    def test_empty_early_window_is_skipped(self):
+        urlopen, calls = _fake_server(data_from=1717200000)   # data starts 2024-06-01
+        with patch("urllib.request.urlopen", new=urlopen), \
+                patch("backtest_engine.data._sleep"):
+            ts, *_ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2024-12-31", api_key="tk_x")
+        assert ts[0] == 1717200000
+        assert np.all(np.diff(ts) == 60)

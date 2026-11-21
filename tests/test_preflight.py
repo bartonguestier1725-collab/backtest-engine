@@ -145,8 +145,10 @@ class TestSimulateTradesIntegration:
                 x for x in w if issubclass(x.category, BacktestQualityWarning)
             ]
             assert len(quality_warnings) == 0
-        # quality should be None when preflight is disabled
-        assert result.quality is None
+        # The grade is still attached (GateKeeper reads it); only the
+        # warning is suppressed. (Before v0.6.0 quality was None here.)
+        assert result.quality is not None
+        assert result.quality.grade == "B"
 
     def test_quality_attribute_grade_b(self):
         """results.quality.grade should be accessible."""

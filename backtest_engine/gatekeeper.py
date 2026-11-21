@@ -4,7 +4,7 @@ Kill bad strategies in 5 minutes, not 7 hours.
 
 Gate 0: Data validation (1 min)    — Do we have enough data? Correct costs?
 Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. PF < 1.05 → dead.
-Gate 2: Coarse screen (20 min)     — Run ~100 combos. PF < 1.10, RF < 1.5 → dead.
+Gate 2: Coarse screen (20 min)     — Run ~100 combos. No combo with PF >= 1.10 AND RF >= 1.5 → dead.
 Gate 3: WFA + CSCV (30 min)       — PBO < 0.40, OOS win rate >= 0.55 → dead.
 Gate 4: Monte Carlo (5 min)        — MC pass rate >= 0.70 → dead.
 
@@ -23,8 +23,10 @@ Usage:
         source_path=__file__,
     )
 
-    # Gate 0: auto-runs BugGuard
-    gk.gate0_validate()
+    # Gate 0: auto-runs BugGuard. Pass the simulation result so the
+    # trade-level checks (look-ahead, same-bar reentry, trade count, no-SL,
+    # open-price entry, fixed cost) run too.
+    gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))
 
     # Gate 1: provide a function that takes param_dict → metric_dict
     gk.gate1_quick(run_func, quick_params)
@@ -72,7 +74,9 @@ class GateKeeper:
     strategy_name : Human-readable name for logging.
     n_bars : Total bars in dataset.
     bar_minutes : Bar size in minutes (for data period check).
-    resolution_minutes : Execution simulation resolution.
+    resolution_minutes : Bar size (minutes) the SL/TP fills were simulated on
+                         (1 for simulate_trades_hires on 1m bars). If None,
+                         it is assumed equal to ``bar_minutes`` and GK-00 warns.
     spreads_used : Cost dict for BugGuard validation.
     source_path : Script path for source code checks.
     expected_costs : {pair: cost_in_price_units} for cost validation.
@@ -94,7 +98,7 @@ class GateKeeper:
         strategy_name: str,
         n_bars: int = 0,
         bar_minutes: int = 60,
-        resolution_minutes: int = 1,
+        resolution_minutes: Optional[int] = None,
         spreads_used: Optional[dict[str, float]] = None,
         source_path: Optional[str | Path] = None,
         expected_costs: Optional[dict[str, float]] = None,
@@ -117,7 +121,8 @@ class GateKeeper:
         self.strategy_name = strategy_name
         self.n_bars = n_bars
         self.bar_minutes = bar_minutes
-        self.resolution_minutes = resolution_minutes
+        self.resolution_declared = resolution_minutes is not None
+        self.resolution_minutes = resolution_minutes if resolution_minutes is not None else bar_minutes
         self.spreads_used = spreads_used
         self.source_path = source_path
         self.expected_costs = expected_costs
@@ -137,12 +142,31 @@ class GateKeeper:
             print(f"  Move on to the next strategy idea.")
             print(f"{'!'*70}")
 
-    def gate0_validate(self) -> GateResult:
+    def gate0_validate(
+        self,
+        trades: Optional[np.ndarray] = None,
+        sl_distances: Optional[np.ndarray] = None,
+        avg_price: float = 0.0,
+        timestamps: Optional[np.ndarray] = None,
+    ) -> GateResult:
         """Gate 0: Data validation + BugGuard.
 
         Checks all known bug patterns. Fails if any ERROR-level check fails.
-        Warns if key inputs (source_path, spreads_used, n_bars) are missing,
-        as this causes important checks to be silently skipped.
+        Warns (GK-00) if key inputs are missing, since each missing input
+        silently skips the checks that need it.
+
+        Parameters
+        ----------
+        trades : TradeResults from simulate_trades / simulate_trades_hires.
+                 Enables BG-01 (look-ahead), BG-06b (trade count), BG-08
+                 (same-bar reentry), BG-09b (open-price entry) and BG-12
+                 (fixed cost, inferred from ``cost_r``). NO_FILL trades are
+                 ignored.
+        sl_distances : SL distances passed to the simulation (same length as
+                       ``trades``). Enables BG-12 and BG-14.
+        avg_price : Representative price (e.g. median close). Enables BG-14.
+        timestamps : Bar open timestamps of the data. Enables BG-10
+                     (last bar still forming).
         """
         self._header("Gate 0", "Data Validation + BugGuard")
         t0 = time.time()
@@ -150,6 +174,7 @@ class GateKeeper:
         # Build GK-00 check before running BugGuard so it's included
         # in print_report() and n_warnings count is consistent.
         from backtest_engine.bug_guard import CheckResult
+        from backtest_engine._types import EXIT_NO_FILL
         gk00 = None
         missing = []
         if self.source_path is None:
@@ -158,6 +183,47 @@ class GateKeeper:
             missing.append("spreads_used (BG-02 skipped)")
         if self.n_bars == 0:
             missing.append("n_bars (BG-06 skipped)")
+        if not self.resolution_declared:
+            missing.append(
+                f"resolution_minutes (BG-05 assumes {self.resolution_minutes}min = bar_minutes)"
+            )
+        if trades is None:
+            missing.append("trades (BG-01/06b/08/09b/12 skipped)")
+        if sl_distances is None or avg_price <= 0:
+            missing.append("sl_distances + avg_price (BG-14 skipped)")
+
+        trade_kwargs: dict[str, Any] = {}
+        n_filled = 0
+        if trades is not None:
+            arr = np.asarray(trades)
+            filled = arr["exit_type"] != EXIT_NO_FILL
+            order = np.argsort(arr["entry_bar"][filled], kind="stable")
+            f = arr[filled][order]
+            quality = getattr(trades, "quality", None)
+            has_open = getattr(quality, "has_open_prices", None)
+            trade_kwargs["entry_bars"] = f["entry_bar"]
+            trade_kwargs["exit_bars"] = f["exit_bar"]
+            n_filled = len(f)
+            trade_kwargs["n_trades"] = n_filled  # 0 skips BG-06b; added below
+            if has_open is not None:
+                trade_kwargs["open_prices_provided"] = bool(has_open)
+            # Close entry (no open_prices) enters on the signal bar by design;
+            # BG-09b reports that. BG-01 checks next-bar-open / retrace / hires.
+            if has_open is not False and "signal_bar" in (arr.dtype.names or ()):
+                trade_kwargs["signal_bars"] = f["signal_bar"]
+            if sl_distances is not None:
+                sl = np.asarray(sl_distances, dtype=np.float64)
+                if len(sl) != len(arr):
+                    raise ValueError("sl_distances must have the same length as trades")
+                sl_f = sl[filled][order]
+                trade_kwargs["sl_distances"] = sl_f
+                cost = f["cost_r"]
+                trade_kwargs["cost_is_fixed"] = bool(
+                    len(cost) > 1 and np.any(cost != 0) and np.ptp(cost) == 0
+                )
+        elif sl_distances is not None:
+            trade_kwargs["sl_distances"] = np.asarray(sl_distances, dtype=np.float64)
+
         if missing:
             gk00 = CheckResult(
                 check_id="GK-00",
@@ -177,9 +243,16 @@ class GateKeeper:
             resolution_minutes=self.resolution_minutes,
             n_bars=self.n_bars,
             bar_minutes=self.bar_minutes,
+            avg_price=avg_price,
+            timestamps=timestamps,
             strict=False,  # We handle the result ourselves
             _suppress_print=True,  # We'll print after adding GK-00
+            **trade_kwargs,
         )
+
+        if trades is not None and n_filled == 0:
+            from backtest_engine.bug_guard import check_min_trades
+            report.results.append(check_min_trades(0))
 
         # Append GK-00 before printing so counts are correct
         if gk00 is not None:
@@ -294,18 +367,26 @@ class GateKeeper:
         max_rf = best_rf.get("rf", 0)
         n_profitable = sum(1 for r in results if r.get("total_r", 0) > 0)
 
+        # Both thresholds must hold for the SAME combo. (Before v0.6.0 the
+        # best PF and the best RF could come from two different combos.)
+        both = [r for r in results
+                if r.get("pf", 0) >= self.GATE2_MIN_PF and r.get("rf", 0) >= self.GATE2_MIN_RF]
+
         msg = (f"Best PF={max_pf:.3f}, Best RF={max_rf:.2f}, "
+               f"{len(both)}/{len(results)} combos meet PF>={self.GATE2_MIN_PF} "
+               f"and RF>={self.GATE2_MIN_RF}, "
                f"{n_profitable}/{len(results)} profitable")
 
-        passed = max_pf >= self.GATE2_MIN_PF and max_rf >= self.GATE2_MIN_RF
+        passed = len(both) > 0
+        best = max(both, key=lambda x: x.get("pf", 0)) if both else best_pf
         result = GateResult("Gate 2", passed, msg,
-                            best_metric=best_pf, elapsed_sec=elapsed)
+                            best_metric=best, elapsed_sec=elapsed)
         self.gates.append(result)
         self._footer("Gate 2", result)
 
         if passed:
-            print(f"\n  Top 5 by PF:")
-            top5 = sorted(results, key=lambda x: x.get("pf", 0), reverse=True)[:5]
+            print(f"\n  Top 5 by PF (combos meeting both thresholds):")
+            top5 = sorted(both, key=lambda x: x.get("pf", 0), reverse=True)[:5]
             for r in top5:
                 print(f"    PF={r['pf']:.3f} RF={r.get('rf',0):.2f} "
                       f"R={r['total_r']:.1f} n={r['n_trades']}")

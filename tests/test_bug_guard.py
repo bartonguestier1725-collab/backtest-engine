@@ -341,3 +341,74 @@ class TestRunAllChecksBG14Integration:
         )
         bg14 = [r for r in report.results if r.check_id == "BG-14"]
         assert len(bg14) == 0
+
+
+# ── v0.6.0 additions ────────────────────────────────────────────────────────
+
+from backtest_engine.bug_guard import (
+    check_incomplete_bars as _cib, check_bfill_in_source, check_entry_price_type,
+)
+
+
+class TestBfillVariants:
+    @pytest.mark.parametrize("code", [
+        "df = df.backfill()\n",
+        "df.fillna(method='backfill')\n",
+        "df.interpolate(limit_direction='both')\n",
+        "s.interpolate(method='linear', limit_direction=\"backward\")\n",
+    ])
+    def test_detected(self, tmp_path, code):
+        src = tmp_path / "s.py"
+        src.write_text(code)
+        r = check_bfill_in_source(src)
+        assert not r.passed and r.severity == "ERROR"
+
+    def test_forward_interpolate_ok(self, tmp_path):
+        src = tmp_path / "s.py"
+        src.write_text("df.interpolate(limit_direction='forward')\ndf.ffill()\n")
+        assert check_bfill_in_source(src).passed
+
+
+class TestEntryPriceLoose:
+    @pytest.mark.parametrize("code", [
+        "entry_price = close[i]\n",
+        "entry_price = closes[sig]\n",
+        "entry_price = df['close'].iloc[i]\n",
+    ])
+    def test_lowercase_close_warns(self, tmp_path, code):
+        src = tmp_path / "s.py"
+        src.write_text(code)
+        r = check_entry_price_type(src)
+        assert not r.passed and r.severity == "WARN"
+
+    def test_next_bar_not_flagged(self, tmp_path):
+        src = tmp_path / "s.py"
+        src.write_text("entry_price = close[i + 1]\nentry_price = open_[i+1]\n")
+        assert check_entry_price_type(src).passed
+
+    def test_original_pattern_still_error(self, tmp_path):
+        src = tmp_path / "s.py"
+        src.write_text("entry_price = df.Close.values[i]\n")
+        r = check_entry_price_type(src)
+        assert not r.passed and r.severity == "ERROR"
+
+
+class TestIncompleteBars:
+    def test_sorted_complete(self):
+        ts = np.arange(10, dtype=np.int64) * 3600
+        assert _cib(ts, 60, now=10 * 3600).passed
+
+    def test_last_bar_forming_warns(self):
+        ts = np.arange(10, dtype=np.int64) * 3600
+        r = _cib(ts, 60, now=9 * 3600 + 600)
+        assert not r.passed and r.severity == "WARN"
+
+    def test_duplicates_error(self):
+        ts = np.array([0, 3600, 3600, 7200], dtype=np.int64)
+        r = _cib(ts, 60, now=10**9)
+        assert not r.passed and r.severity == "ERROR"
+
+    def test_run_all_checks_wires_timestamps(self):
+        ts = np.array([0, 3600, 3600], dtype=np.int64)
+        report = run_all_checks(timestamps=ts, strict=False, _suppress_print=True)
+        assert any(r.check_id == "BG-10" and not r.passed for r in report.results)

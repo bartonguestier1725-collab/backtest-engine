@@ -25,4 +25,8 @@ TRADE_RESULT_DTYPE = np.dtype([
     ("entry_bar", np.int32),
     ("exit_bar", np.int32),
     ("cost_r", np.float64),
+    # Bar index (same timeframe as entry_bar/exit_bar) whose close produced the
+    # signal. For simulate_trades_hires this is the last execution bar inside
+    # the signal bar, so entry_bar > signal_bar for every filled trade.
+    ("signal_bar", np.int32),
 ])

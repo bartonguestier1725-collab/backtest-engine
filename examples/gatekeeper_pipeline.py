@@ -1,7 +1,9 @@
 """Example: Full GateKeeper pipeline (Gate 0–4).
 
-Demonstrates how a new user would validate a strategy through all 5 gates.
-Uses synthetic data with relaxed thresholds so all gates are exercised.
+Demonstrates how a new user would validate a strategy through the 5 gates.
+Gates run in order and the pipeline stops at the first failed gate. On this
+synthetic random-walk data (no real edge) it stops at Gate 3, which is the
+point: the gates exist to kill strategies like this early.
 
 NOTE: This example lowers Gate 2 thresholds for demonstration purposes.
       With real data, always use the default thresholds or stricter.
@@ -9,7 +11,7 @@ NOTE: This example lowers Gate 2 thresholds for demonstration purposes.
 The GateKeeper kills bad strategies fast:
   Gate 0 (1 min)  — BugGuard: data quality + code bug detection
   Gate 1 (5 min)  — Quick feasibility: ~20 param combos, PF >= 1.05?
-  Gate 2 (20 min) — Coarse screen: ~100 combos, PF >= 1.10, RF >= 1.5?
+  Gate 2 (20 min) — Coarse screen: ~100 combos, one combo with PF >= 1.10 and RF >= 1.5?
   Gate 3 (30 min) — WFA + CSCV: overfitting detection
   Gate 4 (5 min)  — Monte Carlo: drawdown resilience
 """
@@ -29,10 +31,12 @@ def generate_data(n_bars=300_000, seed=42):
     np.random.seed(seed)
     returns = np.random.randn(n_bars) * 0.001 + 0.00005
     close = 1.10000 + np.cumsum(returns)
+    # Each bar opens near the previous close and its range contains both
+    # the open and the close, as in real OHLC data.
+    open_price = np.r_[close[0], close[:-1]] + np.random.randn(n_bars) * 0.00002
     spread = np.abs(np.random.randn(n_bars)) * 0.0003
-    high = close + spread
-    low = close - spread
-    open_price = close + np.random.randn(n_bars) * 0.0001
+    high = np.maximum(open_price, close) + spread
+    low = np.minimum(open_price, close) - spread
     return high, low, close, open_price
 
 
@@ -110,7 +114,15 @@ def main():
     gk.GATE2_MIN_RF = 0.5    # default: 1.5
     gk.GATE3_MAX_PBO = 0.60  # default: 0.40
 
-    gk.gate0_validate()
+    # Pass one real simulation so the trade-level checks run too
+    # (look-ahead, same-bar reentry, trade count, no-SL, open-price entry).
+    sig, dirs = find_signals(CLOSE, 10, 50)
+    sl = ATR_VALS[sig] * 1.5
+    baseline = simulate_trades(
+        HIGH, LOW, CLOSE, sig, dirs, sl, sl * 2.0, max_hold=100, open_prices=OPEN,
+        entry_costs=COST_MODEL.per_trade_cost(["EURUSD"] * len(sig), sl), preflight=False,
+    )
+    gk.gate0_validate(trades=baseline, sl_distances=sl, avg_price=float(np.median(CLOSE)))
 
     # ── Gate 1: Quick feasibility (~20 combos) ────────────────────────────
     quick_params = [

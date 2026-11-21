@@ -22,8 +22,8 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 ### Opinionated modules (FX defaults, fully customizable)
 
 - **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
-- **BugGuard** — 14 automated checks (BG-01–BG-13) that catch look-ahead bias, cost underestimation, fixed-cost misuse, spread filter violations, overfitting, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market
-- **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard, Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
+- **BugGuard** — 14 automated checks (BG-01–BG-14) that catch look-ahead in the trade arrays, cost underestimation, fixed-cost misuse, spread filter violations, short data periods, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market. The checks are pattern and index checks: they do not prove that your signal code is free of look-ahead (see [Known limitations](#known-limitations))
+- **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard (pass your simulation result so the trade-level checks run), Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
 
 ## Install
 
@@ -73,10 +73,11 @@ print(f"Avg PnL: {np.mean(results['pnl_r']):.3f}R")
 
 ## Multi-resolution execution
 
-`simulate_trades_hires()` generates signals on coarse bars (e.g. 1h) but runs trade simulation on fine bars (e.g. 1m). This eliminates the intra-bar SL/TP ordering problem that inflates results on coarse timeframes.
+`simulate_trades_hires()` generates signals on coarse bars (e.g. 1h) but runs trade simulation on fine bars (e.g. 1m). SL/TP hits are then resolved in the order they happened inside the coarse bar, instead of assuming SL first.
 
 ```python
-from backtest_engine import fetch_aggvault, simulate_trades_hires, rsi, atr, BrokerCost, LONG, SHORT
+import numpy as np
+from backtest_engine import fetch_aggvault, simulate_trades_hires, rsi, atr, LONG, SHORT
 
 # Signals on 1h
 ts_1h, o_1h, h_1h, l_1h, c_1h, _ = fetch_aggvault("EURUSD", "1h", "2024-01-01", "2025-01-01")
@@ -84,7 +85,7 @@ rsi_vals = rsi(c_1h, 14)
 atr_vals = atr(h_1h, l_1h, c_1h, 14)
 # ... generate signal_bars, directions, sl_distances, tp_distances
 
-# Execution on 1m (7s fetch, 0.01s simulation)
+# Execution on 1m (one year = 3 requests, ~15 s)
 ts_1m, o_1m, h_1m, l_1m, c_1m, _ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2025-01-01")
 
 results = simulate_trades_hires(
@@ -92,11 +93,22 @@ results = simulate_trades_hires(
     directions=directions, sl_distances=sl_distances, tp_distances=tp_distances,
     max_hold=48, signal_bar_minutes=60,
     exec_timestamps=ts_1m, exec_opens=o_1m, exec_highs=h_1m,
-    exec_lows=l_1m, exec_closes=c_1m, entry_costs=entry_costs,
+    exec_lows=l_1m, exec_closes=c_1m,
 )
 ```
 
-**Why this matters:** On EURUSD RSI 30/70 (2024), 1h-only simulation reports PF=0.90 while hires reports PF=0.53. The 1h version overestimates performance by ~41% because it can't determine SL/TP hit order within a bar.
+**Timing.** Timestamps are bar open times (as returned by `fetch_aggvault`). A signal on the 10:00 1h bar is known when that bar closes at 11:00, so the trade enters at the open of the 11:00 1m bar. `results["signal_bar"]` is the last 1m bar inside the signal bar (10:59), so `entry_bar > signal_bar` for every filled trade. Signals that close outside the 1m data come back as `NO_FILL` with a `DataQualityWarning`.
+
+**How much it changes results.** On EURUSD RSI(14) 30/70, 2024, SL 2×ATR / TP 4×ATR (696 trades, [`examples/rsi_reversal/compare_1h_vs_hires.py`](examples/rsi_reversal/compare_1h_vs_hires.py)):
+
+| | 1h fills | 1m fills |
+|---|---|---|
+| GROSS | PF 0.948 | PF 0.959 |
+| NET (Tradeview ILC) | PF 0.898 | PF 0.908 |
+
+For this strategy the two are close. The difference can be larger when SL/TP are small relative to the bar range, because more bars then touch both.
+
+**Correction (v0.6.0):** earlier versions of this README said this example drops from PF 0.90 on 1h to 0.53 on 1m, "a 41% overestimate". That 0.53 came from a bug: before v0.6.0, `simulate_trades_hires` entered one 1m bar after the signal bar *opened*, 59 minutes before the signal was known. See the [CHANGELOG](CHANGELOG.md).
 
 ## simulate_trades options
 
@@ -107,12 +119,23 @@ results = simulate_trades_hires(
 | `exit_mode="sar_trailing"` | Parabolic SAR-based trailing (with direction-aware Plan B) |
 | `exit_mode="custom"` | Exit on external signal |
 | `be_trigger_pct` | Move SL to entry price when profit reaches this fraction of TP (0 = disabled) |
-| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP before filling (0 = market entry) |
+| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP from the signal close before filling (0 = market entry). SL/TP are measured from the fill price |
 | `retrace_timeout` | Max bars to wait for limit fill before cancelling |
 | `trail_activation_r` | R-multiple required to activate trailing stop |
 | `trail_distance_r` | Trailing stop distance in R-multiples |
-| `open_prices` | Enter at next-bar open instead of signal-bar close (supported in all modes) |
+| `open_prices` | Enter at next-bar open instead of signal-bar close (supported in all modes). Also lets stops fill at the open on a gap |
 | `entry_costs` | Per-trade cost array in R-units (e.g. from `BrokerCost.per_trade_cost()`). Subtracted from `pnl_r` post-simulation. `NO_FILL` trades automatically get zero cost |
+
+### Fill rules
+
+- **Entry**: next bar's open (`open_prices` given), signal bar's close (not given), or the limit price (`retrace_pct`).
+- **Same bar touches SL and TP**: SL (conservative). Use `simulate_trades_hires()` to resolve the order.
+- **Stops on a gap**: a stop (SL, breakeven, trailing) on a bar that opens beyond it fills at that open, not at the stop price, so a loss can exceed 1R. Needs `open_prices`; without them the stop price is used.
+- **TP and SAR targets**: fill at their price even on a gap (conservative).
+- **Limit (retrace) fill bar**: only the SL is checked on the bar where the limit fills; whether the high/low that would hit TP came before or after the fill is unknowable.
+- **Custom exits** (`exit_mode="custom"`): fill at the close of the bar where `exit_signals` is True.
+
+All prices must be consistent: if any bar opens outside its own high/low, `simulate_trades()` emits a `DataQualityWarning`.
 
 ## Pre-flight quality check
 
@@ -127,17 +150,16 @@ results = simulate_trades_hires(
 
 Grade indicates whether inputs were provided, not whether they are correct. Use BugGuard (BG-02, BG-12) to validate cost accuracy.
 
-Grade B/C emit a `BacktestQualityWarning` with details on what's missing. The simulation still runs — nothing is blocked.
+Grade B emits a `BacktestQualityWarning` with details on what's missing. The simulation still runs — nothing is blocked.
 
 ```python
-# Grade C — warns you
+# Grade B — warns you
 results = simulate_trades(high, low, close, ...)
-# BacktestQualityWarning: Backtest Quality: C
-#   entry_costs:  NOT PROVIDED — costs will be 0 (use BrokerCost.per_trade_cost())
+# BacktestQualityWarning: Backtest Quality: B
 #   open_prices:  NOT PROVIDED — entry at signal-bar close (optimistic bias)
 
 # Grade A — no warning
-results = simulate_trades(..., open_prices=open_arr, entry_costs=cost_arr)
+results = simulate_trades(..., open_prices=open_arr)
 
 # Access quality info
 print(results.quality.grade)  # "A"
@@ -147,7 +169,7 @@ import warnings
 from backtest_engine import BacktestQualityWarning
 warnings.filterwarnings("ignore", category=BacktestQualityWarning)
 
-# Or disable per call
+# Or disable per call (results.quality is still set)
 results = simulate_trades(..., preflight=False)
 ```
 
@@ -182,9 +204,9 @@ expected = cost.cost_prices()  # {"EURUSD": 0.00007, "USDJPY": 0.014, ...}
 
 ## BugGuard
 
-Automatically checks for 14 known backtesting bugs before you trust any result.
+Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`.
 
-The checks themselves are instrument-agnostic (look-ahead bias, bfill leak, same-bar reentry, etc.). The only FX-specific part is data period estimation — pass `start_ts`/`end_ts` to use calendar dates instead.
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is data period estimation — pass `start_ts`/`end_ts` to use calendar dates instead.
 
 ```python
 from backtest_engine import bug_guard, BrokerCost
@@ -199,11 +221,13 @@ report = bug_guard(
     resolution_minutes=5,
     n_bars=len(close),
     n_trades=len(signal_bars),
+    timestamps=timestamps,
 )
-# BG-01: Look-ahead bias      BG-02: Cost underestimation  BG-04: bfill data leak
-# BG-05: Coarse-bar SL/TP     BG-06: Short-period overfit  BG-07: Full-period quantile
-# BG-08: Same-bar re-entry     BG-09: Close-price entry     BG-09b: Missing open_prices
-# BG-12: Fixed-cost misuse    BG-13: Spread filter gap     ... and more
+# BG-01: signal_bar >= entry_bar  BG-02: Cost underestimation  BG-04: bfill/backfill leak
+# BG-05: Coarse-bar SL/TP         BG-06: Short period          BG-06b: Few trades
+# BG-07: Full-period quantile     BG-08: Same-bar re-entry     BG-09: Close-price entry
+# BG-09b: Missing open_prices     BG-10: Unsorted / still-forming bars
+# BG-12: Fixed-cost misuse        BG-13: Spread filter gap     BG-14: Effectively no SL
 ```
 
 Individual checks can also be called standalone:
@@ -230,15 +254,18 @@ gk = GateKeeper(
     strategy_name="SMA Crossover v3",
     n_bars=7022,
     bar_minutes=60,
-    resolution_minutes=1,
+    resolution_minutes=1,          # fills simulated on 1m bars (simulate_trades_hires)
     spreads_used=spreads,
     source_path=__file__,
     expected_costs=BrokerCost.tradeview_ilc().cost_prices(),
 )
 
-gk.gate0_validate()                    # BugGuard 14 checks + GK-00 input completeness
+# BugGuard + GK-00 input completeness. Pass a simulation result so the
+# trade-level checks (BG-01/06b/08/09b/12/14) run.
+gk.gate0_validate(trades=results, sl_distances=sl_distances,
+                  avg_price=float(np.median(close)), timestamps=timestamps)
 gk.gate1_quick(run_func, quick_params)  # ~20 combos → PF >= 1.05?
-gk.gate2_screen(run_func, full_params)  # ~100 combos → PF >= 1.10, RF >= 1.5?
+gk.gate2_screen(run_func, full_params)  # ~100 combos → one combo with PF >= 1.10 and RF >= 1.5?
 gk.gate3_validate(wfa_result, cscv_result)  # WFA OOS win rate + CSCV PBO
 gk.gate4_montecarlo(mc)                     # MC drawdown pass rate >= 70%
 gk.summary()
@@ -254,13 +281,13 @@ gk.GATE4_MIN_MC_PASS = 0.80
 
 | Gate | Time | What it checks | Kill condition |
 |------|------|---------------|----------------|
-| Gate 0 | 1 min | BugGuard (14 checks) + input completeness | Any BG ERROR → RuntimeError |
+| Gate 0 | 1 min | BugGuard (the checks whose inputs you passed) + input completeness | Any BG ERROR → RuntimeError |
 | Gate 1 | 5 min | ~20 param combos on full data | Best PF < 1.05 |
-| Gate 2 | 20 min | ~100 param combos, PF + Recovery Factor | Best PF < 1.10 or RF < 1.5 |
+| Gate 2 | 20 min | ~100 param combos, PF + Recovery Factor | No single combo with PF >= 1.10 and RF >= 1.5 |
 | Gate 3 | 30 min | WFA out-of-sample win rate + CSCV PBO | OOS win rate < 0.55 or PBO > 0.40 |
 | Gate 4 | 5 min | Monte Carlo DD pass rate + confidence percentile | DD@confidence > dd_limit or pass rate < 0.70 |
 
-Gate 0 also emits a `GK-00 WARN` when key inputs are missing (`source_path`, `spreads_used`, `n_bars`), which causes important BugGuard checks to be silently skipped.
+Gate 0 also emits a `GK-00 WARN` listing every missing input (`source_path`, `spreads_used`, `n_bars`, `resolution_minutes`, `trades`, `sl_distances` + `avg_price`) and the checks it skips. If `resolution_minutes` is not given, BG-05 assumes the fills were simulated on `bar_minutes` bars.
 
 ### run_func
 
@@ -368,7 +395,7 @@ report = st.run_all(block_size=10)
 # report["degraded"]["wr_minus5"]     — win rate -5%
 # report["degraded"]["rr_80pct"]      — reward:risk scaled to 80%
 # report["degraded"]["cost_plus_01r"] — extra 0.1R cost per trade
-# report["degraded"]["combined"]      — all degradations at once
+# report["degraded"]["combined"]      — milder mix: win rate -3%, RR x0.90, +0.05R cost
 ```
 
 Block bootstrap resamples consecutive blocks of trades instead of individual shuffling. This preserves the natural clustering of losing streaks, giving more realistic worst-case DD estimates.
@@ -397,7 +424,7 @@ Two ways to get OHLC data — both return the same 6-tuple `(timestamps, opens, 
 ```python
 from backtest_engine import load_ohlcv, fetch_aggvault
 
-# Option 1: From CSV file
+# Option 1: From CSV file (time column: date strings, or epoch seconds/milliseconds)
 timestamps, opens, highs, lows, closes, volume = load_ohlcv("data.csv")
 
 # Option 2: From AggVault API (ISO dates, no epoch math)
@@ -408,6 +435,10 @@ timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
 ```
 
 `fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
+
+The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes about a minute. Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data).
+
+All timestamps are bar open times in Unix seconds (UTC).
 
 ## HTML Report Generation
 
@@ -467,14 +498,17 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 Things this engine handles, and things it doesn't. Read before trusting any result.
 
 **Handled automatically:**
-- **Look-ahead bias** — BugGuard BG-01 detects signal/entry on same bar. Use `open_prices` for next-bar-open entry.
-- **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without this, 1h-bar simulation overestimates PF by ~40%.
+- **Entry timing** — Use `open_prices` for next-bar-open entry. BugGuard BG-01 flags trades whose entry bar is not after the signal bar.
+- **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without it, a bar that touches both SL and TP counts as SL.
+- **Stop gaps** — With `open_prices`, a stop that the market gaps through fills at the open (see [Fill rules](#fill-rules)).
 - **Cost underestimation** — BugGuard BG-02 compares your costs against measured broker spreads. Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
 - **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
 - **Short-period overfitting** — BugGuard BG-06 warns on <12 months of data. CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder handles local→UTC conversion.
 
 **NOT handled — your responsibility:**
+- **Look-ahead inside your signal code** — BugGuard checks bar indices and a few source patterns (`bfill`, full-period quantiles, close-price entry). It cannot see `shift(-1)`, `center=True` rolling windows, normalization or model fitting on the full period, or swing points confirmed by future bars. A strategy that looks too good usually has one of these.
+- **Portfolio effects** — Trades are simulated independently: no position overlap limits, margin, or account balance.
 - **Backtest-to-live gap** — Backtesting on aggregated multi-source data (e.g. AggVault median) gives cleaner signals than any single broker. A strategy that works on aggregated data may underperform on your broker's feed due to spread differences, requotes, and slippage. Always forward-test on your actual broker before going live.
 - **Slippage** — Not included in `BrokerCost` presets because it varies per user (colocation ≈ 0, retail ≈ 0.5-1+ pips). Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
 - **Variable spreads** — `BrokerCost` uses static measured spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
@@ -484,10 +518,10 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 ## Tests
 
 ```bash
-python -m pytest tests/ -v
+uv run pytest
 ```
 
-326 tests, all passing.
+408 tests, all passing.
 
 ## License
 

@@ -151,6 +151,18 @@ class TestRRMode:
         assert result.dtype == TRADE_RESULT_DTYPE
 
 
+class TestOpenOutsideRangeWarning:
+    def test_warns(self):
+        from backtest_engine.core import DataQualityWarning
+        close = np.full(10, 100.0)
+        high, low = close + 0.5, close - 0.5
+        open_ = close.copy(); open_[4] = 102.0   # above its own high
+        with pytest.warns(DataQualityWarning, match="1/10 bars open outside"):
+            simulate_trades(high, low, close, np.array([0], dtype=np.int32),
+                            np.array([LONG], dtype=np.int8), np.array([1.0]),
+                            np.array([2.0]), max_hold=5, open_prices=open_)
+
+
 class TestRetraceEntry:
     def test_retrace_fill(self):
         """Limit order should fill when price retraces."""
