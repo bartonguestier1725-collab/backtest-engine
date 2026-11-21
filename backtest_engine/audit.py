@@ -635,7 +635,8 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     module the caller already imported under the same name. ``seed=None``
     picks a random seed (reported in ``seed``). ``timeout`` (seconds) turns a
     hanging strategy into an ``error`` report (the child and any process it
-    started are killed).
+    started are killed). On Linux/macOS, processes the strategy leaves running
+    are also killed 2 s after the audit ends.
 
     The audit is not a sandbox: strategy code runs with your permissions and
     could fake its own report. Audit code you are willing to run.
@@ -674,8 +675,9 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
             args += ["--data-pkl", str(pkl)]
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
-        # An empty PYTHONPATH entry would put the cwd back; relative entries
-        # (e.g. PYTHONPATH=src) are kept, made absolute as Python would.
+        # Empty PYTHONPATH entries (usually accidental, e.g. ":/x") would put
+        # the cwd back, so they are dropped; relative entries (PYTHONPATH=src,
+        # or ".") are kept, made absolute against the cwd as Python would.
         if env.get("PYTHONPATH"):
             keep = [os.path.abspath(x) for x in env["PYTHONPATH"].split(os.pathsep) if x]
             if keep:
@@ -734,7 +736,21 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
                 kill_group()
                 proc.wait()
                 raise
-            kill_group()  # processes the strategy started and left running
+            if os.name != "nt":
+                # Processes the strategy started and left running: give them
+                # (e.g. multiprocessing's resource tracker, which frees leaked
+                # shared memory) up to 2 s to finish, then kill the rest.
+                # POSIX only: on Windows the exited child's tree cannot be
+                # found reliably.
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    try:
+                        os.killpg(proc.pid, 0)
+                    except OSError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    kill_group()
         stderr = stderr_tail()
         if out.exists():
             try:

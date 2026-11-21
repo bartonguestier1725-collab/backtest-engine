@@ -499,7 +499,7 @@ class TestAuditStrategyIsolation:
 class TestAuditStrategyIsolationEdges:
     CLEAN = TestStrategyFile.CLEAN
 
-    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX signals")
+    @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc (Linux)")
     def test_interrupt_kills_the_child(self, tmp_path):
         import os, signal, subprocess, sys, time
         marker = tmp_path / "pid.txt"
@@ -555,7 +555,7 @@ class TestAuditStrategyIsolationEdges:
         monkeypatch.setenv("PYTHONPATH", "src")
         assert audit_strategy(f, n_cuts=8, n_paths=10)["overall"] == "pass"
 
-    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process groups")
+    @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc (Linux)")
     def test_leftover_processes_are_stopped(self, tmp_path):
         import os, time
         marker = tmp_path / "pid.txt"
@@ -616,7 +616,7 @@ class TestAuditStrategyIsolationEdges:
         assert a["overall"] == b["overall"] == "error"
         assert [r["check"] for r in a["results"]] == [r["check"] for r in b["results"]]
 
-    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process groups")
+    @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc (Linux)")
     def test_timeout_kills_grandchildren(self, tmp_path):
         import os, time
         marker = tmp_path / "pid.txt"
@@ -641,3 +641,15 @@ class TestAuditStrategyIsolationEdges:
             except OSError:
                 alive = False
         assert not alive
+
+
+@pytest.mark.skipif(not Path("/dev/shm").exists(), reason="needs /dev/shm (Linux)")
+def test_leaked_shared_memory_is_cleaned_up(tmp_path):
+    """The resource tracker gets time to free shared memory a strategy leaks."""
+    name = f"bt_audit_test_{tmp_path.name}"[:30]
+    f = tmp_path / "s.py"
+    f.write_text("from multiprocessing import shared_memory\n"
+                 f"shm = shared_memory.SharedMemory(name={name!r}, create=True, size=1024)\n"
+                 + TestStrategyFile.CLEAN.split("\n", 1)[1])
+    audit_strategy(f, n_cuts=8, n_paths=10)
+    assert not (Path("/dev/shm") / name).exists()
