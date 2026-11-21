@@ -498,9 +498,10 @@ def check_null_edge(
             f"this backtest (bars often touch both SL and TP; then re-run with "
             f"simulate_trades_hires)." + (
                 f" The same entries with coin-flip directions: "
-                f"{details['placebo_mean_r_per_trade']:+.3f}R (t={t_plc:.1f}; difference "
-                f"t={t_diff:.1f}). If both are near the threshold, re-run with "
-                f"simulate_trades_hires and with another --seed."
+                f"{details['placebo_mean_r_per_trade']:+.3f}R (t={t_plc:.1f}); difference "
+                f"t={t_diff:.1f}. A loss the coin-flip version does not share points to "
+                f"misaligned entries; if the coin-flip t is close to -{t_threshold:.1f}, re-run "
+                f"with simulate_trades_hires and another seed (--seed / seed=)."
                 if t_plc is not None else
                 " The coin-flip comparison that tells them apart needs the backtest to use "
                 "backtest_engine's simulate_trades.")
@@ -521,16 +522,6 @@ def _installed(f) -> bool:
     return "site-packages" in parts or "dist-packages" in parts
 
 
-def _system_file(f) -> bool:
-    """True for the standard library and installed packages."""
-    import sysconfig
-    if _installed(f):
-        return True
-    paths = sysconfig.get_paths()
-    roots = {paths.get(k) for k in ("stdlib", "platstdlib", "purelib", "platlib")} - {None}
-    return any(_under(f, Path(r).resolve()) for r in roots)
-
-
 def _under(f, folder: Path) -> bool:
     try:
         Path(f).resolve().relative_to(folder)
@@ -541,40 +532,19 @@ def _under(f, folder: Path) -> bool:
 
 @contextmanager
 def _strategy_module(path: Path):
-    """Import a strategy file as if run with ``python path``: its folder is
-    first on sys.path for the whole audit (lazy imports inside functions
-    work). Modules cached from elsewhere under a name that this folder
-    provides (``name.py`` or a ``name/`` package) are set aside while the
-    audit runs and put back afterwards. Every module first loaded from a file
-    under the folder (except installed packages, e.g. a .venv there) is dropped
-    afterwards, so a later audit does not reuse it."""
+    """Import a strategy file roughly as ``python path`` would: its folder is
+    first on sys.path while the audit runs. Afterwards sys.path is restored
+    (undoing the strategy's own edits) and modules first loaded from files
+    under the folder (except installed packages) are dropped.
+
+    This does not isolate audits from each other or from the caller; for
+    that, ``audit_strategy`` runs each audit in a fresh Python process.
+    """
     path = path.resolve()
     folder = path.parent
     name = f"_audit_target_{path.stem}_{abs(hash(str(path)))}"
-    def provides_module(mod_name: str) -> bool:  # name.py or a regular package
-        top = mod_name.split(".")[0]
-        return (folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()
-
-    def provides_namespace(mod_name: str) -> bool:  # a folder without __init__.py
-        return (folder / mod_name.split(".")[0]).is_dir()
-
-    set_aside = {}
-    for mod_name in list(sys.modules):
-        m = sys.modules[mod_name]
-        f = getattr(m, "__file__", None)
-        if f and _under(f, folder):
-            continue
-        if provides_module(mod_name):
-            set_aside[mod_name] = sys.modules.pop(mod_name)
-        elif provides_namespace(mod_name):
-            # As in a fresh ``python strategy.py``: the stdlib, installed
-            # packages and builtins win over a folder without __init__.py; the
-            # caller's own modules and other namespace packages do not.
-            is_namespace = f is None and hasattr(m, "__path__")
-            if is_namespace or (f is not None and not _system_file(f)):
-                set_aside[mod_name] = sys.modules.pop(mod_name)
     before = set(sys.modules)
-    saved_path = list(sys.path)  # also undoes sys.path edits made by the strategy
+    saved_path = list(sys.path)
     sys.path.insert(0, str(folder))
     try:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -588,30 +558,15 @@ def _strategy_module(path: Path):
         sys.path[:] = saved_path
         for mod_name in set(sys.modules) - before:
             f = getattr(sys.modules.get(mod_name), "__file__", None)
-            if (mod_name == name or (f and _under(f, folder) and not _installed(f))
-                    or (f is None and provides_namespace(mod_name))):  # namespace packages
+            if mod_name == name or (f and _under(f, folder) and not _installed(f)):
                 sys.modules.pop(mod_name, None)
-        for mod_name, m in set_aside.items():
-            sys.modules.setdefault(mod_name, m)
 
 
-def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 120,
-                   seed: int = 0, rtol: float = 1e-9) -> dict:
-    """Run every applicable test on a strategy file.
-
-    The file defines ``signals(data)`` (for the look-ahead test) and/or
-    ``backtest(data)`` (for the null-data test, with the coin-flip placebo).
-    Optional module constants:
-    ``BAR_MINUTES`` (bar size of ``data``, default 60), ``NULL_VOL``
-    (per-bar volatility of the random walk relative to price, default 0.002)
-    and ``NULL_BARS`` (bars per random walk and for the default look-ahead
-    data, default 5000; raise it for 1m data that is resampled to coarser
-    signal bars inside the strategy).
-    """
+def _audit_in_process(path: Path, data, n_cuts: int, n_paths: int, seed: int,
+                      rtol: float) -> dict:
     from backtest_engine.bug_guard import (
         check_bfill_in_source, check_expanding_quantile, check_entry_price_type,
     )
-    path = Path(path)
     results: list[AuditResult] = []
     for chk in (check_bfill_in_source, check_expanding_quantile, check_entry_price_type):
         r = chk(path)
@@ -642,9 +597,52 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
         results.append(AuditResult(
             "strategy_file", "error", f"could not load {path.name}: {type(e).__name__}: {e}",
             {"traceback": traceback.format_exc(limit=5)}))
+    return _report(path, results)
+
+
+def _report(path, results: list[AuditResult]) -> dict:
     order = {"fail": 0, "error": 1, "warn": 2, "pass": 3}
     overall = min((r.verdict for r in results), key=order.__getitem__)
     return {"file": str(path), "overall": overall, "results": [r.to_dict() for r in results]}
+
+
+def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 120,
+                   seed: int = 0, rtol: float = 1e-9, isolate: bool = True) -> dict:
+    """Run every applicable test on a strategy file.
+
+    The file defines ``signals(data)`` (for the look-ahead test) and/or
+    ``backtest(data)`` (for the null-data test, with the coin-flip placebo).
+    Optional module constants: ``BAR_MINUTES`` (bar size of ``data``,
+    default 60), ``NULL_VOL`` (per-bar volatility of the random walk relative
+    to price, default 0.002) and ``NULL_BARS`` (bars per random walk and for
+    the default look-ahead data, default 5000; raise it for 1m data that is
+    resampled to coarser signal bars inside the strategy).
+
+    With ``isolate=True`` (default) the audit runs in a fresh Python process
+    (``python -m backtest_engine.audit``), so strategy files and their
+    helpers never meet another audit's modules or the caller's.
+    """
+    path = Path(path)
+    if not isolate:
+        return _audit_in_process(path, data, n_cuts, n_paths, seed, rtol)
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="bt_audit_") as tmp:
+        out = Path(tmp) / "report.json"
+        cmd = [sys.executable, "-m", "backtest_engine.audit", str(path.resolve()),
+               "--json-out", str(out), "--cuts", str(n_cuts), "--paths", str(n_paths),
+               "--seed", str(seed), "--rtol", repr(rtol)]
+        if data is not None:
+            npz = Path(tmp) / "data.npz"
+            np.savez(npz, **_as_data(data))
+            cmd += ["--data-npz", str(npz)]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if out.exists():
+            return json.loads(out.read_text())
+    return _report(path, [AuditResult(
+        "strategy_file", "error",
+        f"the audit process exited with code {proc.returncode} without a report",
+        {"stderr": proc.stderr[-2000:]})])
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -659,16 +657,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rtol", type=float, default=1e-9,
                     help="relative tolerance for float signals (default 1e-9)")
+    ap.add_argument("--json-out", help=argparse.SUPPRESS)   # used by audit_strategy
+    ap.add_argument("--data-npz", help=argparse.SUPPRESS)   # used by audit_strategy
     a = ap.parse_args(argv)
     data = None
     if a.csv:
         from backtest_engine.utils import load_ohlcv
         data = load_ohlcv(a.csv)
-    report = audit_strategy(a.strategy, data=data, n_cuts=a.cuts, n_paths=a.paths,
-                            seed=a.seed, rtol=a.rtol)
+    elif a.data_npz:
+        with np.load(a.data_npz) as z:
+            data = {k: z[k] for k in z.files}
+    report = _audit_in_process(Path(a.strategy), data, a.cuts, a.paths, a.seed, a.rtol)
+    if a.json_out:
+        Path(a.json_out).write_text(json.dumps(report, ensure_ascii=False))
     if a.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
-    else:
+    elif not a.json_out:
         print(f"Audit: {report['file']}  ->  {report['overall'].upper()}")
         for r in report["results"]:
             print(f"  [{r['verdict'].upper():>5}] {r['check']}: {r['summary']}")

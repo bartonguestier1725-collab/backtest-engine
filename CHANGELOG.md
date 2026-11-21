@@ -121,7 +121,9 @@ with v0.5.x before relying on them.
   18 of 20 runs. An LLM
   (Claude Sonnet) reading each strategy file caught 15 with 1 false alarm;
   it missed a leak inside an imported helper whose source it was not shown,
-  which `check_null_edge` found.
+  which `check_null_edge` found. `audit_strategy` runs each audit in a fresh
+  Python process (as the CLI does), so a strategy's helpers never meet
+  another audit's modules or the caller's.
 - `AGENTS.md`: how an AI assistant should backtest with this library (write
   `signals`/`backtest`, run the audit, do not report a failing result).
 - `TradeResults` has a `signal_bar` field (same timeframe as `entry_bar`).
