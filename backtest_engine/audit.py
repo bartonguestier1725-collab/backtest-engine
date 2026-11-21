@@ -497,9 +497,10 @@ def check_null_edge(
             f"before the bar whose close produced the signal), or the SL-first rule biases "
             f"this backtest (bars often touch both SL and TP; then re-run with "
             f"simulate_trades_hires)." + (
-                f" The same entries with coin-flip directions do not lose significantly "
-                f"({details['placebo_mean_r_per_trade']:+.3f}R, t={t_plc:.1f}), so the fill "
-                f"rules are unlikely to explain it."
+                f" The same entries with coin-flip directions: "
+                f"{details['placebo_mean_r_per_trade']:+.3f}R (t={t_plc:.1f}; difference "
+                f"t={t_diff:.1f}). If both are near the threshold, re-run with "
+                f"simulate_trades_hires and with another --seed."
                 if t_plc is not None else
                 " The coin-flip comparison that tells them apart needs the backtest to use "
                 "backtest_engine's simulate_trades.")
@@ -518,6 +519,16 @@ def _installed(f) -> bool:
     """True for files of installed packages (e.g. a .venv inside the folder)."""
     parts = Path(f).parts
     return "site-packages" in parts or "dist-packages" in parts
+
+
+def _system_file(f) -> bool:
+    """True for the standard library and installed packages."""
+    import sysconfig
+    if _installed(f):
+        return True
+    paths = sysconfig.get_paths()
+    roots = {paths.get(k) for k in ("stdlib", "platstdlib", "purelib", "platlib")} - {None}
+    return any(_under(f, Path(r).resolve()) for r in roots)
 
 
 def _under(f, folder: Path) -> bool:
@@ -540,18 +551,30 @@ def _strategy_module(path: Path):
     path = path.resolve()
     folder = path.parent
     name = f"_audit_target_{path.stem}_{abs(hash(str(path)))}"
-    def provided(mod_name: str) -> bool:  # a module or (namespace) package in folder
+    def provides_module(mod_name: str) -> bool:  # name.py or a regular package
         top = mod_name.split(".")[0]
-        return (folder / f"{top}.py").exists() or (folder / top).is_dir()
+        return (folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()
+
+    def provides_namespace(mod_name: str) -> bool:  # a folder without __init__.py
+        return (folder / mod_name.split(".")[0]).is_dir()
 
     set_aside = {}
     for mod_name in list(sys.modules):
-        if not provided(mod_name):
+        m = sys.modules[mod_name]
+        f = getattr(m, "__file__", None)
+        if f and _under(f, folder):
             continue
-        f = getattr(sys.modules[mod_name], "__file__", None)
-        if not (f and _under(f, folder)):
+        if provides_module(mod_name):
             set_aside[mod_name] = sys.modules.pop(mod_name)
+        elif provides_namespace(mod_name):
+            # As in a fresh ``python strategy.py``: the stdlib, installed
+            # packages and builtins win over a folder without __init__.py; the
+            # caller's own modules and other namespace packages do not.
+            is_namespace = f is None and hasattr(m, "__path__")
+            if is_namespace or (f is not None and not _system_file(f)):
+                set_aside[mod_name] = sys.modules.pop(mod_name)
     before = set(sys.modules)
+    saved_path = list(sys.path)  # also undoes sys.path edits made by the strategy
     sys.path.insert(0, str(folder))
     try:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -562,14 +585,11 @@ def _strategy_module(path: Path):
         spec.loader.exec_module(mod)
         yield mod
     finally:
-        try:
-            sys.path.remove(str(folder))
-        except ValueError:
-            pass
+        sys.path[:] = saved_path
         for mod_name in set(sys.modules) - before:
             f = getattr(sys.modules.get(mod_name), "__file__", None)
             if (mod_name == name or (f and _under(f, folder) and not _installed(f))
-                    or (f is None and provided(mod_name))):  # namespace packages
+                    or (f is None and provides_namespace(mod_name))):  # namespace packages
                 sys.modules.pop(mod_name, None)
         for mod_name, m in set_aside.items():
             sys.modules.setdefault(mod_name, m)

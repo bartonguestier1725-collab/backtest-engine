@@ -262,6 +262,7 @@ class TestNullEdge:
             return bt
         for seed in (0, 1):
             check_null_edge(recorder(seed), n_paths=10, n_bars=200, seed=seed, placebo=False)
+        assert len(seen[0]) == len(seen[1]) == 10
         assert not any(np.allclose(a, b) for a in seen[0] for b in seen[1])
 
     @pytest.mark.parametrize("sl,tp,trail", [(0.5, 3.0, False), (1.0, 20.0, True), (2.0, 3.0, False)])
@@ -384,6 +385,36 @@ def backtest(data):
             (tmp_path / name / "strat.py").write_text(strat)
         assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
+
+    def test_strategy_sys_path_edits_are_undone(self, tmp_path):
+        """A strategy that appends its own lib/ folder to sys.path (review 6:
+        the next folder's audit found the first folder's helper)."""
+        import sys
+        leaky = "import numpy as np\ndef sig(c):\n    return np.sign(np.r_[c[1:], c[-1]] - c)\n"
+        clean = ("import numpy as np\nfrom backtest_engine import rsi\n"
+                 "def sig(c):\n    r = rsi(c, 14)\n    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        strat = ("import os, sys\nsys.path.append(os.path.join(os.path.dirname(__file__), 'lib'))\n"
+                 "from libhelper import sig\ndef signals(data):\n    return sig(data['close'])\n")
+        for name, helper in (("a", clean), ("b", leaky)):
+            (tmp_path / name / "lib").mkdir(parents=True)
+            (tmp_path / name / "lib" / "libhelper.py").write_text(helper)
+            (tmp_path / name / "strat.py").write_text(strat)
+        before = list(sys.path)
+        got = [audit_strategy(tmp_path / x / "strat.py", n_cuts=8)["overall"] for x in ("a", "b", "a", "b")]
+        assert got == ["pass", "fail", "pass", "fail"]
+        assert sys.path == before
+
+    def test_data_folder_named_like_stdlib_module(self, tmp_path):
+        """A json/ data folder must not replace the stdlib json module."""
+        import json as stdlib_json, sys
+        (tmp_path / "json").mkdir()
+        (tmp_path / "json" / "prices.csv").write_text("x\n")
+        (tmp_path / "strat.py").write_text(
+            "import json\nimport numpy as np\nfrom backtest_engine import rsi\n"
+            "def signals(data):\n    json.dumps(1)\n    r = rsi(data['close'], 14)\n"
+            "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        assert audit_strategy(tmp_path / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert sys.modules["json"] is stdlib_json
 
     def test_callers_module_is_restored(self, tmp_path, monkeypatch):
         import sys, types
