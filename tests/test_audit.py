@@ -512,13 +512,17 @@ class TestAuditStrategyIsolationEdges:
                           f"audit_strategy({str(f)!r}, n_cuts=8, n_paths=10)\n")
         parent = subprocess.Popen([sys.executable, str(runner)])
         child_file = tmp_path / "child.txt"
-        for _ in range(100):
-            if child_file.exists() and child_file.read_text():
-                break
-            time.sleep(0.1)
-        child = int(child_file.read_text())
-        parent.send_signal(signal.SIGINT)
-        parent.wait(timeout=30)
+        try:
+            for _ in range(200):
+                if child_file.exists() and child_file.read_text():
+                    break
+                time.sleep(0.1)
+            child = int(child_file.read_text())
+            parent.send_signal(signal.SIGINT)
+            parent.wait(timeout=30)
+        finally:
+            if parent.poll() is None:
+                parent.kill()
         time.sleep(0.5)
         try:
             os.kill(child, 0)
@@ -527,14 +531,48 @@ class TestAuditStrategyIsolationEdges:
             alive = False
         assert not alive
 
-    def test_numba_cache_reused_between_calls(self, tmp_path):
-        import time
-        f = tmp_path / "strat.py"
-        f.write_text(self.CLEAN)
-        audit_strategy(f, n_cuts=8, n_paths=10)            # warm the cache
-        t0 = time.time()
+    def test_child_imports_this_package_from_its_real_path(self, tmp_path):
+        """Real file paths keep numba's on-disk cache valid between calls."""
+        import backtest_engine
+        f = tmp_path / "where.py"
+        f.write_text("import backtest_engine, backtest_engine.core as c\n"
+                     "def signals(data):\n"
+                     "    raise ValueError('FILES ' + backtest_engine.__file__ + ' ' + c.__file__)\n")
+        rep = audit_strategy(f, n_cuts=8, n_paths=10)
+        msg = [r["summary"] for r in rep["results"] if r["check"] == "lookahead"][0]
+        real = Path(backtest_engine.__file__).resolve()
+        assert str(real) in msg and str(real.parent / "core.py") in msg
+
+    def test_relative_pythonpath_entries_work(self, tmp_path, monkeypatch):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "relhelper.py").write_text(
+            "import numpy as np\nfrom backtest_engine import rsi\n"
+            "def sig(c):\n    r = rsi(c, 14)\n    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        f = tmp_path / "elsewhere" / "s.py"
+        f.parent.mkdir()
+        f.write_text("from relhelper import sig\ndef signals(data):\n    return sig(data['close'])\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PYTHONPATH", "src")
+        assert audit_strategy(f, n_cuts=8, n_paths=10)["overall"] == "pass"
+
+    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process groups")
+    def test_leftover_processes_are_stopped(self, tmp_path):
+        import os, time
+        marker = tmp_path / "pid.txt"
+        f = tmp_path / "s.py"
+        f.write_text("import subprocess, sys\n"
+                     "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+                     f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+                     + self.CLEAN.split("\n", 1)[1])
         audit_strategy(f, n_cuts=8, n_paths=10)
-        assert time.time() - t0 < 2.5
+        pid = int(marker.read_text())
+        time.sleep(0.5)
+        try:
+            os.kill(pid, 0)
+            alive = "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+        except (ProcessLookupError, OSError):
+            alive = False
+        assert not alive
 
     def test_current_folder_cannot_shadow_the_library(self, tmp_path, monkeypatch):
         fake = tmp_path / "cwd" / "backtest_engine"

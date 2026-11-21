@@ -628,7 +628,7 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     resampled to coarser signal bars inside the strategy).
 
     With ``isolate=True`` (default) the audit runs in a fresh Python process
-    (``python -m backtest_engine.audit``, using this copy of the library), so
+    (this copy of the library's CLI, ``backtest_engine.audit.main``), so
     strategy files and their helpers never meet another audit's modules or
     the caller's. That costs about a second per call, and ``data`` is copied
     to a temporary file. ``isolate=False`` runs in this process and reuses any
@@ -659,11 +659,8 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     import tempfile
     with tempfile.TemporaryDirectory(prefix="bt_audit_") as tmp:  # mode 0700
         out = Path(tmp) / "report.json"
-        # -P: do not put the current folder first on the child's sys.path
-        # (a backtest_engine/ or json.py there would be imported instead).
-        cmd = [sys.executable, "-P", "-m", "backtest_engine.audit", str(path.resolve()),
-               "--json-out", str(out), "--cuts", str(int(n_cuts)), "--paths", str(int(n_paths)),
-               "--seed", str(int(seed)), "--rtol", repr(float(rtol))]
+        args = [str(path.resolve()), "--json-out", str(out), "--cuts", str(int(n_cuts)),
+                "--paths", str(int(n_paths)), "--seed", str(int(seed)), "--rtol", repr(float(rtol))]
         if data is not None:
             pkl = Path(tmp) / "data.pkl"
             try:
@@ -674,19 +671,22 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
                     "data", "error",
                     f"data could not be passed to the audit process ({type(e).__name__}: {e}); "
                     f"use plain numpy columns, or isolate=False")], seed)
-            cmd += ["--data-pkl", str(pkl)]
+            args += ["--data-pkl", str(pkl)]
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
-        # Empty or relative PYTHONPATH entries would put the cwd back.
+        # An empty PYTHONPATH entry would put the cwd back; relative entries
+        # (e.g. PYTHONPATH=src) are kept, made absolute as Python would.
         if env.get("PYTHONPATH"):
-            keep = [x for x in env["PYTHONPATH"].split(os.pathsep) if x and os.path.isabs(x)]
+            keep = [os.path.abspath(x) for x in env["PYTHONPATH"].split(os.pathsep) if x]
             if keep:
                 env["PYTHONPATH"] = os.pathsep.join(keep)
             else:
                 env.pop("PYTHONPATH")
         # Run this copy of the library: load the package from its real path
         # (so numba's on-disk cache, keyed by file path, is reused), then run
-        # the CLI. -P keeps the current folder off the child's sys.path.
+        # the CLI. -P keeps the current folder off the child's sys.path (a
+        # backtest_engine/ or json.py there would be imported instead).
+        # Worker processes a strategy spawns import from sys.path as usual.
         pkg = Path(__file__).resolve().parent
         boot = (
             "import sys, importlib.util\n"
@@ -698,7 +698,7 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
             "from backtest_engine.audit import main\n"
             "sys.exit(main(sys.argv[1:]))\n"
         )
-        cmd = [sys.executable, "-P", "-c", boot] + cmd[4:]
+        cmd = [sys.executable, "-P", "-c", boot] + args
         err_path = Path(tmp) / "stderr.txt"
         popen_kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
                     if os.name == "nt" else {"start_new_session": True})
@@ -734,6 +734,7 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
                 kill_group()
                 proc.wait()
                 raise
+            kill_group()  # processes the strategy started and left running
         stderr = stderr_tail()
         if out.exists():
             try:
