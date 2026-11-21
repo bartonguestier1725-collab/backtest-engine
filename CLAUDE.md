@@ -64,7 +64,7 @@ generate_report() → HTML file
 ### simulate_trades vs simulate_trades_hires
 
 - `simulate_trades()`: シグナルと約定が同一時間足
-- `simulate_trades_hires()`: シグナルは粗い足(1h)、約定は細かい足(1m)。1hバー内のSL/TP判定順序問題を回避。1h足のBTは結果を40%過大評価するケースがある
+- `simulate_trades_hires()`: シグナルは粗い足(1h)、約定は細かい足(1m)。1hバー内のSL/TP判定順序問題を回避。注意: 現行版は約定がシグナル足の終値より59分早い（先読み）。修正中。「1h足は40%過大評価」という以前の記述は、この不具合による誤り
 
 ### HTMLレポート（generate_report）
 

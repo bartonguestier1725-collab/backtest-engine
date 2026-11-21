@@ -96,7 +96,7 @@ results = simulate_trades_hires(
 )
 ```
 
-**Why this matters:** On EURUSD RSI 30/70 (2024), 1h-only simulation reports PF=0.90 while hires reports PF=0.53. The 1h version overestimates performance by ~41% because it can't determine SL/TP hit order within a bar.
+**Correction:** an earlier version of this README said this example drops from PF 0.90 (1h) to 0.53 (1m), "a 41% overestimate". That number came from a look-ahead bug in `simulate_trades_hires` (it entered 59 minutes before the 1h signal bar closed), not from the 1h simulation. A fix and re-measured numbers are in progress.
 
 ## simulate_trades options
 
@@ -468,7 +468,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 
 **Handled automatically:**
 - **Look-ahead bias** — BugGuard BG-01 detects signal/entry on same bar. Use `open_prices` for next-bar-open entry.
-- **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without this, 1h-bar simulation overestimates PF by ~40%.
+- **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without it, a bar that touches both SL and TP counts as SL.
 - **Cost underestimation** — BugGuard BG-02 compares your costs against measured broker spreads. Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
 - **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
 - **Short-period overfitting** — BugGuard BG-06 warns on <12 months of data. CSCV gives a formal PBO estimate.
