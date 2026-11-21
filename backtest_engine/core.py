@@ -16,6 +16,13 @@ from backtest_engine.preflight import run_preflight, BacktestQualityWarning
 from backtest_engine._results import TradeResults
 
 
+# Internal hook for backtest_engine.audit's placebo. When set, a callable
+# ``n -> int8 array of +1/-1`` that multiplies the directions passed to
+# simulate_trades (and so simulate_trades_hires); SL/TP distances are left
+# as they are. Not part of the public API.
+_DIRECTION_FLIP = None
+
+
 class DataQualityWarning(UserWarning):
     """Issued when the price data looks broken: bar opens outside the bar's
     high/low (simulate_trades), or execution data that does not cover a
@@ -951,6 +958,8 @@ def simulate_trades(
     close = np.ascontiguousarray(close, dtype=np.float64)
     signal_bars = np.ascontiguousarray(signal_bars, dtype=np.int32)
     directions = np.ascontiguousarray(directions, dtype=np.int8)
+    if _DIRECTION_FLIP is not None and len(directions):
+        directions = np.ascontiguousarray(directions * _DIRECTION_FLIP(len(directions)), dtype=np.int8)
     sl_distances = np.ascontiguousarray(sl_distances, dtype=np.float64)
     tp_distances = np.ascontiguousarray(tp_distances, dtype=np.float64)
 

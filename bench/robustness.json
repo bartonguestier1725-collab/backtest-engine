@@ -109,7 +109,7 @@
     "leak": true,
     "real_eurusd_1h": "fail",
     "lookahead_fail_of_5_seeds": 5,
-    "null_flag_of_3_seeds": 3
+    "null_flag_of_3_seeds": 2
   },
   "s17": {
     "name": "vol_regime_expanding",
@@ -168,6 +168,27 @@
   "s25": {
     "name": "hires_engine",
     "leak": false,
+    "null_flag_of_3_seeds": 0
+  },
+  "s26": {
+    "name": "candle_stop",
+    "leak": false,
+    "real_eurusd_1h": "pass",
+    "lookahead_fail_of_5_seeds": 0,
+    "null_flag_of_3_seeds": 0
+  },
+  "s27": {
+    "name": "long_only_dips",
+    "leak": false,
+    "real_eurusd_1h": "pass",
+    "lookahead_fail_of_5_seeds": 0,
+    "null_flag_of_3_seeds": 0
+  },
+  "s28": {
+    "name": "series_with_params",
+    "leak": false,
+    "real_eurusd_1h": "pass",
+    "lookahead_fail_of_5_seeds": 0,
     "null_flag_of_3_seeds": 0
   }
 }

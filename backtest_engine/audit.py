@@ -16,15 +16,14 @@ Two tests, both independent of what the strategy code looks like:
    continuous (Brownian bridge) path between its open and close, so a stop or
    target inside [low, high] was really touched and fills at its level fairly.
    The expected PnL before costs is then zero, minus a small pessimistic bias
-   from the SL-first rule when a bar touches both SL and TP. Optionally the
-   same trades are run with coin-flip directions (a placebo with the same
-   entry bars, exits and sizing), which cancels that bias.
+   from the SL-first rule when a bar touches both SL and TP. The same trades
+   are also run with coin-flip directions (inside simulate_trades, with the
+   SL/TP distances unchanged), which keeps that bias and removes any
+   information in the directions.
 
 A strategy file for the CLI defines ``signals(data)`` and/or
 ``backtest(data)``; ``data`` is a dict of numpy arrays with keys
-``time, open, high, low, close`` (and ``volume`` if available). ``backtest``
-should get its signals by calling ``signals(data)``, so the audit can swap in
-the placebo::
+``time, open, high, low, close`` (and ``volume`` if available)::
 
     python -m backtest_engine.audit my_strategy.py            # human-readable
     python -m backtest_engine.audit my_strategy.py --json     # for AI agents
@@ -108,9 +107,11 @@ def random_walk_bars(
     bar_minutes: int = 60,
     vol: float = 0.002,
     start_price: float = 100.0,
-    seed: int = 0,
+    seed=0,
 ) -> dict:
     """Driftless random-walk OHLC bars (plus a random volume column).
+
+    ``seed`` is an int or a numpy SeedSequence.
 
     The close follows an arithmetic random walk with per-bar standard
     deviation ``vol * start_price``. Each bar opens at the previous close, and
@@ -200,13 +201,13 @@ def _diagnose(hits: list[dict]) -> str:
     if all(h["latest_changed"] < 5 for h in hits):
         return ("only the first bars of the data changed: probably a wrap-around "
                 "(np.roll) that puts the last bars at the start")
-    near = min(h["cut"] - h["latest_changed"] for h in hits)
-    far = max(h["cut"] - h["earliest_changed"] for h in hits)
+    near = min(h["cut"] - h["latest_changed"] + 1 for h in hits)
+    far = max(h["reach_bars"] for h in hits)
     if far <= 2:
-        return "the signal uses the next bar(s)"
+        return f"the signal uses the next {far} bar(s)"
     if near <= 2 and far <= 60:
-        return f"a window reaching up to {far} bars into the future (e.g. a centered window or a pivot)"
-    return (f"changes reach up to {far} bars before the cut: a statistic, filter or model "
+        return f"a window looking up to {far} bars ahead (e.g. a centered window or a pivot)"
+    return (f"signals up to {far} bars before the cut changed: a statistic, filter or model "
             f"over the whole sample")
 
 
@@ -239,6 +240,8 @@ def check_lookahead(
     rtol : Relative tolerance for float signals (default 1e-9, so numerical
            noise from e.g. FFT convolution is not reported as look-ahead).
     """
+    if n_cuts < 1:
+        return AuditResult("lookahead", "error", "n_cuts must be >= 1")
     d = _as_data(data if data is not None else random_walk_bars())
     n = len(d["close"])
     warmup = max(1, n // 10) if warmup is None else int(warmup)
@@ -250,7 +253,8 @@ def check_lookahead(
         again = _per_bar(signal_fn({k: v.copy() for k, v in d.items()}), n)
     except Exception as e:  # surfaced to the user/agent as an error verdict
         return AuditResult("lookahead", "error", f"signal function raised {type(e).__name__}: {e}")
-    atol = 1e-12 * float(np.nanmax(np.abs(base))) if np.isfinite(base).any() else 0.0
+    finite = np.abs(base[np.isfinite(base)])
+    atol = 1e-12 * float(finite.max()) if len(finite) else 0.0
     if not np.all(_same(base, again, rtol, atol)):
         return AuditResult(
             "lookahead", "error",
@@ -286,7 +290,8 @@ def check_lookahead(
                 hits.append({
                     "cut": int(cut), "rewrite": mode, "bars_changed": int(len(idx)),
                     "earliest_changed": int(idx.min()), "latest_changed": int(idx.max()),
-                    "reach_bars": int(cut - idx.min()),
+                    # how many bars ahead the earliest changed signal looked
+                    "reach_bars": int(cut - idx.min() + 1),
                 })
     cut_hit = sorted({h["cut"] for h in hits})
     details = {
@@ -327,22 +332,45 @@ def _gross_pnl(r) -> np.ndarray:
     return np.asarray(arr, dtype=np.float64).ravel()
 
 
-def _t(x: np.ndarray) -> float:
-    sd = x.std(ddof=1)
-    if sd > 0:
-        return float(x.mean() / (sd / np.sqrt(len(x))))
-    return 0.0 if x.mean() == 0 else float(np.copysign(np.inf, x.mean()))
+def _cluster_t(tot: np.ndarray, cnt: np.ndarray) -> tuple[float, float]:
+    """Mean R per trade over all paths and its t-statistic, with paths as
+    clusters (trades within a path overlap; paths are independent). Unlike
+    the mean of per-path means, it is not biased when the number of trades
+    depends on how a path went."""
+    n = cnt.sum()
+    mu = tot.sum() / n
+    k = len(tot)
+    resid = tot - mu * cnt
+    se = np.sqrt(k / (k - 1) * np.sum(resid ** 2)) / n
+    if se > 1e-12 * max(1.0, abs(mu)):
+        return float(mu), float(mu / se)
+    return float(mu), (0.0 if abs(mu) <= 1e-12 else float(np.copysign(np.inf, mu)))
+
+
+@contextmanager
+def _coin_flip_directions(seed_seq):
+    """While active, simulate_trades multiplies the trade directions by random
+    +1/-1 and keeps the SL/TP distances: the same trades with coin-flip
+    directions."""
+    from backtest_engine import core
+    rng = np.random.default_rng(seed_seq)
+    prev = core._DIRECTION_FLIP
+    core._DIRECTION_FLIP = lambda n: rng.choice(np.array([-1, 1], dtype=np.int8), n)
+    try:
+        yield
+    finally:
+        core._DIRECTION_FLIP = prev
 
 
 def check_null_edge(
     backtest_fn: Callable[[dict], Any],
-    n_paths: int = 20,
+    n_paths: int = 30,
     n_bars: int = 5000,
     bar_minutes: int = 60,
     vol: float = 0.002,
     seed: int = 0,
-    t_threshold: float = 3.0,
-    placebo_fn: Optional[Callable[[dict, int], Any]] = None,
+    t_threshold: float = 3.5,
+    placebo: bool = True,
     n_placebo: int = 2,
 ) -> AuditResult:
     """Null-data test: the full backtest on driftless random walks.
@@ -353,95 +381,107 @@ def check_null_edge(
                   ``pnl_r`` field, or a plain array of per-trade R). Runs the
                   whole pipeline: signals, simulate_trades, costs. Costs are
                   added back (``cost_r``) before testing.
-    n_paths : Independent random walks (at least 10). The t-statistics are
-              computed across paths, since trades within a path overlap.
-    placebo_fn : Optional ``placebo_fn(data, k) -> trade results``: the same
-                 backtest with the same entry bars but random directions
-                 (k = 0, 1, ... selects the coin flips). ``audit_strategy``
-                 builds it from the file's ``signals``. It has the same
-                 entries, exits and sizing, so the difference to it cancels
-                 fill-rule biases.
-    t_threshold : |t| above which a result is flagged.
+    n_paths : Independent random walks (at least 10). Paths come from
+              ``SeedSequence([seed, k])``, so different seeds share no path.
+              The t-statistics treat each path as a cluster of trades.
+    placebo : Also run the backtest with the direction of every trade passed
+              to ``simulate_trades`` / ``simulate_trades_hires`` replaced by a
+              coin flip (SL/TP distances unchanged): the same trades with
+              random directions. On a driftless walk this keeps every
+              fill-rule bias (SL-first) and removes any information in the
+              directions. It has no effect if the backtest does not call the
+              engine's simulators; then it is dropped (``details``).
+    t_threshold : |t| above which a result is flagged. 3.5 with 30 paths
+                  flags about 0.5% of runs of a clean strategy (bench).
 
     Verdicts
     --------
-    fail : the strategy makes money on random data (look-ahead somewhere), or
-           differs from its own placebo (entries carry information about
-           later prices, or are misaligned in time), or, without a placebo,
-           loses clearly more than chance.
-    warn : it loses on random data but no more than its placebo: the SL-first
-           rule (a bar touching both SL and TP counts as SL) biases this
-           backtest; resolve the order with simulate_trades_hires.
+    fail : the strategy makes money on random data (look-ahead somewhere);
+           or differs from its placebo (the directions carry information
+           about later prices, or entries are misaligned in time); or,
+           without an effective placebo, loses clearly more than chance.
+    warn : it loses on random data and so does its placebo, by about as much:
+           the SL-first rule (a bar touching both SL and TP counts as SL)
+           biases this backtest; resolve the order with simulate_trades_hires.
     """
     if n_paths < _MIN_PATHS:
         return AuditResult("null_edge", "error", f"n_paths must be >= {_MIN_PATHS}")
-    m, p, n_trades, all_pnl = [], [], 0, []
+    tot, cnt, ptot, all_pnl = [], [], [], []
+    same_as_real = True
     t0 = time.time()
     for k in range(n_paths):
-        d = random_walk_bars(n_bars, bar_minutes, vol, seed=seed + k)
+        d = random_walk_bars(n_bars, bar_minutes, vol, seed=np.random.SeedSequence([seed, k]))
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                pnl = _gross_pnl(backtest_fn(d))
-                if placebo_fn is not None:
-                    pl = [_gross_pnl(placebo_fn(d, k * n_placebo + j)) for j in range(n_placebo)]
+                pnl = _gross_pnl(backtest_fn({kk: v.copy() for kk, v in d.items()}))
+                pl = []
+                if placebo:
+                    for j in range(n_placebo):
+                        with _coin_flip_directions(np.random.SeedSequence([seed, k, 1 + j])):
+                            pl.append(_gross_pnl(backtest_fn({kk: v.copy() for kk, v in d.items()})))
         except Exception as e:
             return AuditResult("null_edge", "error", f"backtest function raised {type(e).__name__}: {e}")
-        n_trades += len(pnl)
+        tot.append(float(pnl.sum()))
+        cnt.append(len(pnl))
         all_pnl.append(pnl)
-        m.append(float(pnl.mean()) if len(pnl) else np.nan)
-        if placebo_fn is not None:
-            pv = np.concatenate(pl) if pl else np.array([])
-            p.append(float(pv.mean()) if len(pv) else np.nan)
-    m = np.array(m)
-    ok = ~np.isnan(m)
-    if placebo_fn is not None:
-        p = np.array(p)
-        ok &= ~np.isnan(p)
-    if ok.sum() < _MIN_PATHS or n_trades < 30:
+        if placebo:
+            ptot.append(float(np.mean([x.sum() for x in pl])))
+            if any(len(x) != len(pnl) or not np.allclose(x, pnl, rtol=0, atol=1e-12) for x in pl):
+                same_as_real = False
+    tot, cnt = np.array(tot), np.array(cnt)
+    n_trades = int(cnt.sum())
+    if n_trades < 30 or np.sum(cnt > 0) < _MIN_PATHS:
         return AuditResult("null_edge", "error",
                            f"Too few trades on null data ({n_trades} in {n_paths} paths) to test. "
                            f"Raise NULL_BARS or use a looser entry rule for the test.")
-    t_raw = _t(m[ok])
+    mean, t_raw = _cluster_t(tot, cnt)
     x = np.concatenate(all_pnl)
     gp, gl = float(x[x > 0].sum()), float(-x[x < 0].sum())
     details = {
-        "n_paths": n_paths, "n_bars": n_bars, "n_trades": int(n_trades),
-        "mean_r_per_path": round(float(m[ok].mean()), 4),
+        "n_paths": n_paths, "n_bars": n_bars, "n_trades": n_trades,
+        "mean_r_per_trade": round(mean, 4),
         "t_across_paths": round(t_raw, 2),
         "gross_profit_factor": round(gp / gl, 3) if gl > 0 else None,
-        "elapsed_sec": round(time.time() - t0, 2),
     }
-    t_diff = None
-    if placebo_fn is not None:
-        diff = m[ok] - p[ok]
-        t_diff = _t(diff)
-        details.update({"placebo_mean_r_per_path": round(float(p[ok].mean()), 4),
-                        "mean_minus_placebo": round(float(diff.mean()), 4),
-                        "t_vs_placebo": round(t_diff, 2)})
-    mean = float(m[ok].mean())
+    t_diff = t_plc = None
+    if placebo and same_as_real:
+        details["placebo"] = ("no effect: the backtest does not pass its trades through "
+                              "backtest_engine's simulate_trades, so it was dropped")
+    elif placebo:
+        ptot = np.array(ptot)
+        plc_mean, t_plc = _cluster_t(ptot, cnt)
+        _, t_diff = _cluster_t(tot - ptot, cnt)
+        details.update({
+            "placebo": "same trades, coin-flip directions",
+            "placebo_mean_r_per_trade": round(plc_mean, 4),
+            "t_placebo": round(t_plc, 2),
+            "t_vs_placebo": round(t_diff, 2),
+        })
+    details["elapsed_sec"] = round(time.time() - t0, 2)
     if t_raw > t_threshold:
         return AuditResult(
             "null_edge", "fail",
             f"EDGE ON RANDOM DATA: {mean:+.3f}R per trade before costs (t={t_raw:.1f} across "
-            f"{ok.sum()} paths) on driftless random walks, where no strategy can have an "
+            f"{n_paths} paths) on driftless random walks, where no strategy can have an "
             f"edge. The pipeline sees the future (signal look-ahead, or entries/exits/"
             f"targets that use bars after the decision).", details)
     if t_diff is not None and abs(t_diff) > t_threshold:
         return AuditResult(
             "null_edge", "fail",
-            f"DIFFERS FROM RANDOM DIRECTIONS: {details['mean_minus_placebo']:+.3f}R per trade "
-            f"versus the same trades with coin-flip directions (t={t_diff:.1f}). On random "
-            f"data the direction cannot carry information about later prices, so the "
-            f"signals use the future or are misaligned in time (e.g. entering at the open "
-            f"of the bar whose close produced the signal).", details)
+            f"DIFFERS FROM RANDOM DIRECTIONS: {mean:+.3f}R per trade against "
+            f"{details['placebo_mean_r_per_trade']:+.3f}R for the same trades with coin-flip "
+            f"directions (t={t_diff:.1f}). On random data the direction cannot carry "
+            f"information about later prices, so the signals use the future or are "
+            f"misaligned in time (e.g. entering at the open of the bar whose close produced "
+            f"the signal).", details)
     if t_raw < -t_threshold:
-        if t_diff is not None:
+        if t_plc is not None and t_plc < -t_threshold:
             return AuditResult(
                 "null_edge", "warn",
                 f"LOSS ON RANDOM DATA from the fill rules: {mean:+.3f}R per trade (t={t_raw:.1f}), "
-                f"the same as with coin-flip directions. Bars often touch both SL and TP, and the "
-                f"SL-first rule makes this backtest pessimistic. Re-run with "
+                f"the same as with coin-flip directions. Bars often touch both SL and TP, and "
+                f"the SL-first rule makes this backtest pessimistic. Re-run with "
                 f"simulate_trades_hires (1m fills) before trusting the result.", details)
         return AuditResult(
             "null_edge", "fail",
@@ -449,37 +489,49 @@ def check_null_edge(
             f"driftless random walks. Either entries are misaligned in time (e.g. entering "
             f"before the bar whose close produced the signal), or the SL-first rule biases "
             f"this backtest (bars often touch both SL and TP; then re-run with "
-            f"simulate_trades_hires). Define signals() and call it from backtest() so the "
-            f"audit can tell the two apart.", details)
+            f"simulate_trades_hires)." + (
+                f" The same trades with coin-flip directions do not lose "
+                f"({details['placebo_mean_r_per_trade']:+.3f}R), so the fill rules do not explain it."
+                if t_plc is not None else
+                " The coin-flip comparison that tells them apart needs the backtest to use "
+                "backtest_engine's simulate_trades."), details)
     return AuditResult(
         "null_edge", "pass",
         f"No edge on random data: {mean:+.3f}R per trade before costs (t={t_raw:.1f} across "
-        f"{ok.sum()} paths)" + (f"; versus coin-flip directions t={t_diff:.1f}" if t_diff is not None else "")
+        f"{n_paths} paths)" + (f"; versus coin-flip directions t={t_diff:.1f}" if t_diff is not None else "")
         + ".", details)
 
 
 # ── Strategy files and CLI ──────────────────────────────────────────────────
 
+def _under(f, folder: Path) -> bool:
+    try:
+        Path(f).resolve().relative_to(folder)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 @contextmanager
 def _strategy_module(path: Path):
-    """Import a strategy file as if run with ``python path``: its folder is on
-    sys.path for the whole audit (lazy imports inside functions work), and
-    afterwards every module loaded from that folder is dropped, so a later
-    audit of another folder does not reuse a same-named helper."""
+    """Import a strategy file as if run with ``python path``: its folder is
+    first on sys.path for the whole audit (lazy imports inside functions
+    work). Modules cached from elsewhere under a name that this folder
+    provides (``name.py`` or ``name/__init__.py``) are set aside while the
+    audit runs and put back afterwards; every module loaded from the folder is
+    dropped afterwards, so a later audit does not reuse it."""
     path = path.resolve()
     folder = path.parent
     name = f"_audit_target_{path.stem}_{abs(hash(str(path)))}"
-    before = set(sys.modules)
-    # A same-named helper cached from another (user) folder would shadow the
-    # one next to this file. Installed packages and the stdlib are left alone.
-    protected = tuple(str(Path(x).resolve()) for x in
-                      {sys.prefix, sys.base_prefix, sys.exec_prefix, Path(__file__).parent})
+    set_aside = {}
     for mod_name in list(sys.modules):
-        if "." in mod_name or not (folder / f"{mod_name}.py").exists():
+        top = mod_name.split(".")[0]
+        if not ((folder / f"{top}.py").exists() or (folder / top / "__init__.py").exists()):
             continue
         f = getattr(sys.modules[mod_name], "__file__", None)
-        if f and Path(f).resolve().parent != folder and not str(Path(f).resolve()).startswith(protected):
-            del sys.modules[mod_name]
+        if not (f and _under(f, folder)):
+            set_aside[mod_name] = sys.modules.pop(mod_name)
+    before = set(sys.modules)
     sys.path.insert(0, str(folder))
     try:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -496,47 +548,19 @@ def _strategy_module(path: Path):
             pass
         for mod_name in set(sys.modules) - before:
             f = getattr(sys.modules.get(mod_name), "__file__", None)
-            if mod_name == name or (f and Path(f).resolve().parent == folder):
+            if mod_name == name or (f and _under(f, folder)):
                 sys.modules.pop(mod_name, None)
+        for mod_name, m in set_aside.items():
+            sys.modules.setdefault(mod_name, m)
 
 
-def _make_placebo(mod) -> Callable[[dict, int], Any]:
-    """The file's backtest with the same entry bars but each signal's
-    direction set by a coin flip. Works when backtest() gets its signals by
-    calling the module-level signals().
-
-    The entry bars and exits stay as they are, so fill-rule biases (SL-first)
-    are the same; the directions carry no information about prices. (Shuffling
-    the signals across bars would not be a fair placebo: a direction moved to
-    an earlier bar was decided with prices that come after it.)"""
-    real = mod.signals
-
-    def placebo(d: dict, k: int):
-        out = real(d)
-        rng = np.random.default_rng(1_000_003 + k)
-        if isinstance(out, tuple):
-            dirs = np.asarray(out[1])
-            fake = (out[0], dirs * rng.choice(np.array([-1, 1], dtype=np.int8), len(dirs)), *out[2:])
-        else:
-            arr = np.asarray(out)
-            if arr.dtype == np.bool_:
-                arr = arr.astype(np.int8)
-            fake = arr * rng.choice(np.array([-1, 1], dtype=np.int8), len(arr))
-        mod.signals = lambda _d: fake
-        try:
-            return mod.backtest(d)
-        finally:
-            mod.signals = real
-    return placebo
-
-
-def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 20,
+def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int = 30,
                    seed: int = 0, rtol: float = 1e-9) -> dict:
     """Run every applicable test on a strategy file.
 
     The file defines ``signals(data)`` (for the look-ahead test) and/or
-    ``backtest(data)`` (for the null-data test; if it calls ``signals(data)``
-    the placebo comparison is added). Optional module constants:
+    ``backtest(data)`` (for the null-data test, with the coin-flip placebo).
+    Optional module constants:
     ``BAR_MINUTES`` (bar size of ``data``, default 60), ``NULL_VOL``
     (per-bar volatility of the random walk relative to price, default 0.002)
     and ``NULL_BARS`` (bars per random walk and for the default look-ahead
@@ -554,20 +578,25 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
         results.append(AuditResult(f"source:{r.check_id}", verdict, r.message))
     try:
         with _strategy_module(path) as mod:
-            bar_minutes = int(getattr(mod, "BAR_MINUTES", 60))
-            vol = float(getattr(mod, "NULL_VOL", 0.002))
-            null_bars = int(getattr(mod, "NULL_BARS", 5000))
-            has_sig, has_bt = hasattr(mod, "signals"), hasattr(mod, "backtest")
-            if has_sig:
-                d = data if data is not None else random_walk_bars(null_bars, bar_minutes, vol, seed=seed)
-                results.append(check_lookahead(mod.signals, d, n_cuts=n_cuts, seed=seed, rtol=rtol))
-            if has_bt:
-                results.append(check_null_edge(
-                    mod.backtest, n_paths=n_paths, n_bars=null_bars, bar_minutes=bar_minutes,
-                    vol=vol, seed=seed, placebo_fn=_make_placebo(mod) if has_sig else None))
-            if not has_sig and not has_bt:
-                results.append(AuditResult("strategy_file", "error",
-                                           "Define signals(data) and/or backtest(data) in the file."))
+            try:
+                bar_minutes = int(getattr(mod, "BAR_MINUTES", 60))
+                vol = float(getattr(mod, "NULL_VOL", 0.002))
+                null_bars = int(getattr(mod, "NULL_BARS", 5000))
+                has_sig, has_bt = hasattr(mod, "signals"), hasattr(mod, "backtest")
+                if has_sig:
+                    d = data if data is not None else random_walk_bars(null_bars, bar_minutes, vol, seed=seed)
+                    results.append(check_lookahead(mod.signals, d, n_cuts=n_cuts, seed=seed, rtol=rtol))
+                if has_bt:
+                    results.append(check_null_edge(
+                        mod.backtest, n_paths=n_paths, n_bars=null_bars, bar_minutes=bar_minutes,
+                        vol=vol, seed=seed))
+                if not has_sig and not has_bt:
+                    results.append(AuditResult("strategy_file", "error",
+                                               "Define signals(data) and/or backtest(data) in the file."))
+            except Exception as e:
+                results.append(AuditResult(
+                    "audit", "error", f"the audit failed: {type(e).__name__}: {e}",
+                    {"traceback": traceback.format_exc(limit=5)}))
     except Exception as e:
         results.append(AuditResult(
             "strategy_file", "error", f"could not load {path.name}: {type(e).__name__}: {e}",
@@ -584,7 +613,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--json", action="store_true", help="print machine-readable JSON")
     ap.add_argument("--csv", help="OHLC(V) CSV for the look-ahead test (default: random walk)")
     ap.add_argument("--cuts", type=int, default=32)
-    ap.add_argument("--paths", type=int, default=20)
+    ap.add_argument("--paths", type=int, default=30)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rtol", type=float, default=1e-9,
                     help="relative tolerance for float signals (default 1e-9)")

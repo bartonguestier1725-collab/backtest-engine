@@ -32,12 +32,7 @@ def _bt(sig_fn, shift=0, sl=2.0, tp=3.0, trail=False, cost=None):
     return bt
 
 
-def _placebo(sig_fn, **kw):
-    bt = _bt(sig_fn, **kw)
-    def placebo(d, k):
-        sig = np.asarray(sig_fn(d))
-        return bt(d, sig * np.random.default_rng(k + 7).choice([-1, 1], len(sig)))
-    return placebo
+
 
 
 class TestRandomWalkBars:
@@ -70,6 +65,25 @@ class TestLookahead:
             return fftconvolve(c, np.ones(20) / 20)[: len(c)] - c   # causal, float noise
         assert check_lookahead(causal_fft_sma, n_cuts=16).verdict == "pass"
 
+    def test_inf_in_signal_does_not_hide_a_leak(self):
+        def leak(d):
+            c = d["close"]
+            s = np.sign(np.r_[c[1:], c[-1]] - c).astype(float)
+            s[0] = np.inf
+            return s
+        assert check_lookahead(leak, n_cuts=8).verdict == "fail"
+
+    def test_reach_is_bars_ahead(self):
+        def shift5(d):
+            c = d["close"]
+            return np.sign(np.r_[c[5:], np.repeat(c[-1], 5)] - c)
+        r = check_lookahead(shift5, n_cuts=16)
+        assert max(h["reach_bars"] for h in r.details["examples"]) <= 5
+        assert "5 bars ahead" in r.summary or "next 5" in r.summary or "up to 5" in r.summary
+
+    def test_zero_cuts_is_error(self):
+        assert check_lookahead(_rsi_sig, n_cuts=0).verdict == "error"
+
     def test_wraparound_is_diagnosed(self):
         def roll(d):
             c = d["close"]
@@ -94,7 +108,7 @@ class TestLookahead:
         r = check_lookahead(leak, n_cuts=16)
         assert r.verdict == "fail"
         assert r.details["cuts_with_change"] == 16
-        assert all(h["reach_bars"] == 0 for h in r.details["examples"])
+        assert all(h["reach_bars"] == 1 for h in r.details["examples"])
 
     def test_centered_window_fails(self):
         def leak(d):
@@ -153,21 +167,50 @@ class TestNullEdge:
         assert r.verdict == "fail"
         assert r.details["t_across_paths"] > 3
 
-    def test_entry_before_signal_fails(self):
-        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=12, n_bars=3000)
+    def test_entry_before_signal_fails_without_placebo(self):
+        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=12, n_bars=3000, placebo=False)
         assert r.verdict == "fail" and "LOSS ON RANDOM DATA" in r.summary
 
     def test_entry_before_signal_fails_against_placebo(self):
-        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=12, n_bars=3000,
-                            placebo_fn=_placebo(_rsi_sig, shift=1))
+        r = check_null_edge(_bt(_rsi_sig, shift=1), n_paths=12, n_bars=3000)
         assert r.verdict == "fail" and "DIFFERS FROM RANDOM DIRECTIONS" in r.summary
+
+    def test_direction_dependent_stops_pass(self):
+        """Stop beyond the signal candle (review 3: a signal-level placebo
+        recomputed these stops for the flipped side and failed every run)."""
+        def bt(d):
+            sig = _rsi_sig(d)
+            o, h, l, c = d["open"], d["high"], d["low"], d["close"]
+            a = atr(h, l, c, 14)
+            sb = np.flatnonzero((sig != 0) & ~np.isnan(a))
+            sb = sb[sb < len(c) - 1].astype(np.int32)
+            dirs = np.sign(sig[sb]).astype(np.int8)
+            sl = np.where(dirs > 0, (c - l)[sb], (h - c)[sb]) + 0.2 * a[sb]
+            return simulate_trades(h, l, c, sb, dirs, sl, 1.5 * sl, max_hold=24, open_prices=o)
+        for seed in (0, 1, 2):
+            r = check_null_edge(bt, n_paths=20, seed=seed)
+            # Tight candle stops make the 1h fills pessimistic (warn is the
+            # designed verdict); the point is that the placebo matches.
+            assert r.verdict in ("pass", "warn"), r.summary
+            assert abs(r.details["t_vs_placebo"]) < 3
+
+    def test_placebo_through_partial(self):
+        from functools import partial
+        sig_fn = partial(_rsi_sig)
+        r = check_null_edge(_bt(sig_fn, shift=1), n_paths=12, n_bars=3000)
+        assert "t_vs_placebo" in r.details and r.verdict == "fail"
+
+    def test_seeds_share_no_paths(self):
+        from backtest_engine.audit import random_walk_bars as rw
+        a = rw(100, seed=np.random.SeedSequence([0, 1]))["close"]
+        b = rw(100, seed=np.random.SeedSequence([1, 0]))["close"]
+        assert not np.allclose(a, b)
 
     @pytest.mark.parametrize("sl,tp,trail", [(0.5, 3.0, False), (1.0, 20.0, True), (2.0, 3.0, False)])
     def test_causal_tight_stops_and_trailing_pass(self, sl, tp, trail):
         """Stops fill fairly on the bridge null (review of v0.6.0: tight SL and
         trailing stops showed an edge on the old discrete-step null)."""
-        r = check_null_edge(_bt(_rsi_sig, sl=sl, tp=tp, trail=trail), n_paths=20,
-                            placebo_fn=_placebo(_rsi_sig, sl=sl, tp=tp, trail=trail))
+        r = check_null_edge(_bt(_rsi_sig, sl=sl, tp=tp, trail=trail), n_paths=20)
         assert r.verdict == "pass", r.summary
 
     def test_costs_are_added_back(self):
@@ -177,8 +220,7 @@ class TestNullEdge:
     def test_sl_first_bias_is_a_warning_with_placebo(self):
         """SL 0.5 / TP 0.5 on coarse bars: bars often touch both; the SL-first
         rule makes the backtest pessimistic. Same for the placebo -> warn."""
-        r = check_null_edge(_bt(_rsi_sig, sl=0.5, tp=0.5), n_paths=20,
-                            placebo_fn=_placebo(_rsi_sig, sl=0.5, tp=0.5))
+        r = check_null_edge(_bt(_rsi_sig, sl=0.5, tp=0.5), n_paths=20)
         assert r.verdict == "warn", r.summary
         assert "SL-first" in r.summary
 
@@ -187,6 +229,7 @@ class TestNullEdge:
             return np.random.default_rng(int(d["close"][-1] * 1e6) % 2**32).normal(0, 1, 200)
         r = check_null_edge(pnl, n_paths=10, n_bars=500)
         assert r.verdict == "pass"
+        assert "no effect" in r.details["placebo"]
 
     def test_too_few_paths_is_error(self):
         assert check_null_edge(_bt(_rsi_sig), n_paths=5).verdict == "error"
@@ -239,7 +282,7 @@ def backtest(data):
         f.write_text("x = 1\n")
         assert audit_strategy(f)["overall"] == "error"
 
-    def test_placebo_is_used_when_backtest_calls_signals(self, tmp_path):
+    def test_placebo_is_used(self, tmp_path):
         f = tmp_path / "strat.py"
         f.write_text(self.CLEAN)
         rep = audit_strategy(f, n_cuts=8, n_paths=10)
@@ -258,6 +301,32 @@ def backtest(data):
             (tmp_path / name / "strat.py").write_text(strat)
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
         assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+
+    def test_helper_package_not_reused(self, tmp_path):
+        leaky = "import numpy as np\ndef sig(c):\n    return np.sign(np.r_[c[1:], c[-1]] - c)\n"
+        clean = ("import numpy as np\nfrom backtest_engine import rsi\n"
+                 "def sig(c):\n    r = rsi(c, 14)\n    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        strat = "from helperpkg import sig\ndef signals(data):\n    return sig(data['close'])\n"
+        for name, helper in (("a", clean), ("b", leaky)):
+            (tmp_path / name / "helperpkg").mkdir(parents=True)
+            (tmp_path / name / "helperpkg" / "__init__.py").write_text(helper)
+            (tmp_path / name / "strat.py").write_text(strat)
+        assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
+
+    def test_callers_module_is_restored(self, tmp_path, monkeypatch):
+        import sys, types
+        mine = types.ModuleType("config")
+        mine.__file__ = str(tmp_path / "elsewhere" / "config.py")
+        monkeypatch.setitem(sys.modules, "config", mine)
+        (tmp_path / "s").mkdir()
+        (tmp_path / "s" / "config.py").write_text("N = 14\n")
+        (tmp_path / "s" / "strat.py").write_text(
+            "import numpy as np\nfrom backtest_engine import rsi\nimport config\n"
+            "def signals(data):\n    r = rsi(data['close'], config.N)\n"
+            "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        assert audit_strategy(tmp_path / "s" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert sys.modules["config"] is mine
 
     def test_dataclass_with_future_annotations_loads(self, tmp_path):
         f = tmp_path / "dc.py"

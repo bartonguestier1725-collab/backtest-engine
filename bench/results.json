@@ -11,8 +11,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.94,
-    "sec": 0.4
+    "null_t": 0.03,
+    "sec": 0.5
   },
   {
     "case": "s02",
@@ -26,7 +26,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 4.2,
+    "null_t": 4.33,
     "sec": 0.3
   },
   {
@@ -41,7 +41,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 36.4,
+    "null_t": 68.87,
     "sec": 0.1
   },
   {
@@ -56,7 +56,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 58.46,
+    "null_t": 71.93,
     "sec": 0.8
   },
   {
@@ -72,8 +72,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 5,
-    "null_t": 1.44,
-    "sec": 0.8
+    "null_t": -0.81,
+    "sec": 0.9
   },
   {
     "case": "s06",
@@ -87,8 +87,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 30,
-    "null_t": 94.73,
-    "sec": 3.1
+    "null_t": 93.46,
+    "sec": 3.8
   },
   {
     "case": "s07",
@@ -102,8 +102,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 21.2,
-    "sec": 0.1
+    "null_t": 29.65,
+    "sec": 0.2
   },
   {
     "case": "s08",
@@ -117,7 +117,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": -9.87,
+    "null_t": -11.76,
     "sec": 0.1
   },
   {
@@ -132,7 +132,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.02,
+    "null_t": -0.13,
     "sec": 0.2
   },
   {
@@ -147,8 +147,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 18.2,
-    "sec": 0.1
+    "null_t": 16.45,
+    "sec": 0.2
   },
   {
     "case": "s11",
@@ -162,8 +162,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 20,
-    "null_t": -0.06,
-    "sec": 0.2
+    "null_t": -1.91,
+    "sec": 0.3
   },
   {
     "case": "s12",
@@ -177,8 +177,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 13,
-    "null_t": 11.56,
-    "sec": 0.3
+    "null_t": 9.24,
+    "sec": 0.4
   },
   {
     "case": "s13",
@@ -192,8 +192,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 85.89,
-    "sec": 0.1
+    "null_t": 79.93,
+    "sec": 0.2
   },
   {
     "case": "s14",
@@ -207,7 +207,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.57,
+    "null_t": -0.14,
     "sec": 0.1
   },
   {
@@ -222,7 +222,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 103.62,
+    "null_t": 110.84,
     "sec": 0.2
   },
   {
@@ -237,7 +237,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 4.12,
+    "null_t": 3.51,
     "sec": 0.1
   },
   {
@@ -252,8 +252,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.05,
-    "sec": 0.5
+    "null_t": -1.6,
+    "sec": 0.7
   },
   {
     "case": "s18",
@@ -267,8 +267,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": -0.94,
-    "sec": 0.2
+    "null_t": -1.48,
+    "sec": 0.3
   },
   {
     "case": "s19",
@@ -282,7 +282,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.65,
+    "null_t": -1.33,
     "sec": 0.1
   },
   {
@@ -297,8 +297,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": -0.41,
-    "sec": 0.1
+    "null_t": -1.83,
+    "sec": 0.2
   },
   {
     "case": "s21",
@@ -312,8 +312,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": -0.5,
-    "sec": 0.5
+    "null_t": 0.18,
+    "sec": 0.7
   },
   {
     "case": "s22",
@@ -327,7 +327,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 0.78,
+    "null_t": 0.94,
     "sec": 0.1
   },
   {
@@ -342,8 +342,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 1.88,
-    "sec": 1.0
+    "null_t": -1.62,
+    "sec": 1.2
   },
   {
     "case": "s24",
@@ -358,8 +358,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": null,
-    "null_t": -4.48,
-    "sec": 0.4
+    "null_t": -6.03,
+    "sec": 1.4
   },
   {
     "case": "s25",
@@ -373,7 +373,55 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": null,
-    "null_t": 1.89,
-    "sec": 0.4
+    "null_t": 0.48,
+    "sec": 1.5
+  },
+  {
+    "case": "s26",
+    "name": "candle_stop",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break",
+    "static": false,
+    "lookahead": false,
+    "null": false,
+    "any": false,
+    "errors": [],
+    "lookahead_cuts": 0,
+    "null_t": 0.21,
+    "sec": 0.1
+  },
+  {
+    "case": "s27",
+    "name": "long_only_dips",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break",
+    "static": false,
+    "lookahead": false,
+    "null": false,
+    "any": false,
+    "errors": [],
+    "lookahead_cuts": 0,
+    "null_t": 0.18,
+    "sec": 0.1
+  },
+  {
+    "case": "s28",
+    "name": "series_with_params",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break",
+    "static": false,
+    "lookahead": false,
+    "null": false,
+    "any": false,
+    "errors": [],
+    "lookahead_cuts": 0,
+    "null_t": 1.26,
+    "sec": 0.3
   }
 ]

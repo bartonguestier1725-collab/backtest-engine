@@ -1,0 +1,1 @@
+{"lookahead": true, "where": "signals: z = (c - c.ewm(span=span, adjust=False).mean()) / c.rolling(span).std()", "reason": "c.rolling(span).std() は近似的に過去のみだが、ここで問題となるのは rolling の窓が因果的でも pandas の ewm/rolling は未来を使わないため、実際の先読みは見当たらず、この判定は誤りの可能性が高い。"}

@@ -109,16 +109,17 @@ with v0.5.x before relying on them.
   four ways and re-runs the signal function; any change at or before the cut
   is look-ahead (half the cuts sit on or just before signal bars, so rare
   signals are tested; float noise is tolerated with `rtol`). `check_null_edge`
-  runs the whole backtest on driftless random walks whose bar extremes come
-  from a Brownian bridge (fair stop/target fills), tests the mean R before
-  costs across paths, and compares with the same trades under coin-flip
-  directions. On a labeled benchmark of 25 strategies (`bench/`), the two
-  together caught all 16 planted leaks with no false alarm on 9 clean ones;
-  on real EURUSD 1h data the look-ahead verdicts were the same; a clean
-  strategy fails `null_edge` in about 1% of runs (1/90). An LLM (Claude
-  Sonnet) reading each strategy file caught 15; it missed a leak inside an
-  imported helper whose source it was not shown, which `check_null_edge`
-  found.
+  runs the whole backtest on 30 driftless random walks whose bar extremes
+  come from a Brownian bridge (fair stop/target fills), tests the mean R
+  before costs with paths as clusters, and compares with the same trades
+  under coin-flip directions (flipped inside `simulate_trades`, SL/TP
+  distances unchanged). On a labeled benchmark of 28 strategies (`bench/`),
+  the two together caught all 16 planted leaks with no false alarm on 12
+  clean ones; on real EURUSD 1h data the look-ahead verdicts were the same;
+  `null_edge` flagged none of 360 runs of the clean strategies. An LLM
+  (Claude Sonnet) reading each strategy file caught 15 with 1 false alarm;
+  it missed a leak inside an imported helper whose source it was not shown,
+  which `check_null_edge` found.
 - `AGENTS.md`: how an AI assistant should backtest with this library (write
   `signals`/`backtest`, run the audit, do not report a failing result).
 - `TradeResults` has a `signal_bar` field (same timeframe as `entry_bar`).
@@ -154,7 +155,7 @@ with v0.5.x before relying on them.
 
 ### Tests
 
-- 343 → 461. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
+- 343 → 469. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
   `tests/test_utils.py` (`load_ohlcv`, `resample_ohlcv`, `find_signal_bar`),
   hires timing, coverage and timestamp units, Gate 0 trade checks (including
   overlapping 1h trades, which must not block), Gate 2 same-combo rule,

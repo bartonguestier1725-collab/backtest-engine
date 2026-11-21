@@ -150,5 +150,26 @@
     "leak": false,
     "kind": "none",
     "layer": "library"
+  },
+  "s26": {
+    "name": "candle_stop",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break"
+  },
+  "s27": {
+    "name": "long_only_dips",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break"
+  },
+  "s28": {
+    "name": "series_with_params",
+    "leak": false,
+    "kind": "none",
+    "layer": "execution",
+    "note": "added after review 3: a placebo that flips signals before backtest() would recompute these trades or break"
   }
 }

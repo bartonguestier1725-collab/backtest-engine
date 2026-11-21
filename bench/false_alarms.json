@@ -1,12 +1,4 @@
 {
-  "runs": 90,
-  "flagged": [
-    {
-      "case": "s09",
-      "seed": 1148,
-      "verdict": "fail",
-      "t": -4.1,
-      "t_vs_placebo": -3.44
-    }
-  ]
+  "runs": 360,
+  "flagged": []
 }

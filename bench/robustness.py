@@ -40,8 +40,7 @@ for cid, lab in sorted(labels.items()):
             kw = dict(n_bars=int(getattr(mod, "NULL_BARS", 5000)),
                       bar_minutes=int(getattr(mod, "BAR_MINUTES", 60)),
                       vol=float(getattr(mod, "NULL_VOL", 0.002)))
-            placebo = audit._make_placebo(mod) if hasattr(mod, "signals") else None
-            nulls = [audit.check_null_edge(mod.backtest, seed=100 * s, placebo_fn=placebo, **kw).verdict
+            nulls = [audit.check_null_edge(mod.backtest, seed=100 * s, **kw).verdict
                      for s in range(1, 4)]
             row["null_flag_of_3_seeds"] = sum(v in ("fail", "warn") for v in nulls)
         out[cid] = row

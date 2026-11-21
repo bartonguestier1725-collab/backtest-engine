@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "シグナルは足の終値までの因果的指標(rsi, sma, atr)のみで作られ、simulate_trades が次の足の始値で約定するため先読みはない。"}

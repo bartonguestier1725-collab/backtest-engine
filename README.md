@@ -22,7 +22,7 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 ### Opinionated modules (FX defaults, fully customizable)
 
 - **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
-- **Strategy audit** (`python -m backtest_engine.audit my_strategy.py --json`) — finds look-ahead by behavior, not by reading code: rewrites the future and checks that past signals do not change, and runs the whole backtest on random walks where no edge can exist. JSON output for AI assistants. Measured on a labeled benchmark of 25 strategies ([bench/](bench/README.md))
+- **Strategy audit** (`python -m backtest_engine.audit my_strategy.py --json`) — finds look-ahead by behavior, not by reading code: rewrites the future and checks that past signals do not change, and runs the whole backtest on random walks where no edge can exist. JSON output for AI assistants. Measured on a labeled benchmark of 28 strategies ([bench/](bench/README.md))
 - **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. Data period estimation defaults to FX market hours but accepts explicit timestamps for any market. These are pattern and index checks: use the audit for look-ahead in signal code
 - **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard (pass your simulation result so the trade-level checks run), Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
 
@@ -275,12 +275,12 @@ uv run python -m backtest_engine.audit my_strategy.py          # or --json; --cs
 | Check | How | Catches |
 |---|---|---|
 | `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jumps; volume is scaled too) and re-runs `signals`. A signal at or before the cut must not change. 32 cuts, half of them on or just before bars with a signal | Leaks that change signals: `shift(-1)`, centered windows, full-sample mean/std/min/max/quantiles, `bfill`, zero-phase filters, FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample. Probabilistic: a leak that rarely flips a signal can pass |
-| `null_edge` | Runs `backtest` on 20 driftless random walks and tests the mean R per trade before costs across paths. Each bar's high/low come from a continuous (Brownian bridge) path, so stops and targets fill at their level fairly. If `backtest` calls `signals`, the same trades with coin-flip directions are run as a placebo (same entries, exits, sizing) | Entries placed before their signal, exits or targets that use later bars, timing bugs inside libraries; and a backtest made pessimistic by the SL-first rule (`warn`) |
-| `source:BG-04/07/09` | BugGuard source patterns | `bfill`, full-period quantiles, entry at close |
+| `null_edge` | Runs `backtest` on 30 driftless random walks and tests the mean R per trade before costs (paths as clusters). Each bar's high/low come from a continuous (Brownian bridge) path, so stops and targets fill at their level fairly. The same backtest is also run with every trade's direction replaced by a coin flip inside `simulate_trades` (same entries, SL/TP distances and exits) as a placebo | Entries placed before their signal, exits or targets that use later bars, timing bugs inside libraries; and a backtest made pessimistic by the SL-first rule (`warn`) |
+| `source:BG-04/07/09` | BugGuard source patterns | Some backward-fill and full-period quantile patterns, entry at close (pattern matching only) |
 
-Exit code 1 on `fail`, 2 on `error`. In Python: `from backtest_engine.audit import check_lookahead, check_null_edge`. `null_edge` uses a t-test at |t| > 3, so a clean strategy fails about once in 100 runs (1 of 90 on the benchmark); a real leak fails again with another `--seed`.
+Exit code 1 on `fail`, 2 on `error`. In Python: `from backtest_engine.audit import check_lookahead, check_null_edge`. `null_edge` flags |t| > 3.5; on the benchmark it flagged none of 360 runs of clean strategies (12 strategies × 30 seeds). Different `--seed` values share no random path, so a real leak fails again with another seed and a chance failure does not.
 
-On the [benchmark](bench/README.md) (16 strategies with a planted leak, 9 without), the two checks together caught all 16 with no false alarm. An LLM reading each strategy file caught 15. It missed the one leak inside an imported helper whose source it was not shown (the pre-v0.6.0 `simulate_trades_hires`, described in the prompt as documented); `null_edge` found it without reading code, and the LLM found it once given the helper's source. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
+On the [benchmark](bench/README.md) (16 strategies with a planted leak, 12 without), the two checks together caught all 16 with no false alarm. An LLM reading each strategy file caught 15, with 1 false alarm. It missed the one leak inside an imported helper whose source it was not shown (the pre-v0.6.0 `simulate_trades_hires`, described in the prompt as documented); `null_edge` found it without reading code, and the LLM found it once given the helper's source. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
 
 ## GateKeeper
 
@@ -560,7 +560,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 uv run pytest
 ```
 
-461 tests, all passing.
+469 tests, all passing.
 
 ## License
 

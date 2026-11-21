@@ -1,0 +1,1 @@
+{"lookahead": false, "where": "", "reason": "RSI/ATR are causal, signals use the bar close, the stop uses the signal bar's own high/low/close (known at close), and simulate_trades enters at the next bar's open, so no future information is used."}

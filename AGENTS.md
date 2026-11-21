@@ -16,7 +16,7 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
        return results   # TradeResults
    ```
 
-   Keep `signals` and `backtest` free of global state that depends on the data you fetched: the audit calls them on other data. Have `backtest` call `signals(data)` (the audit swaps in a placebo there). Set `BAR_MINUTES` (and, for 1m data resampled inside the strategy, `NULL_BARS = 120_000` and `NULL_VOL = 0.00026`) as module constants when the defaults (60-minute bars, 5,000 bars) do not fit.
+   Keep `signals` and `backtest` free of global state that depends on the data you fetched: the audit calls them on other data. Use the engine's `simulate_trades` / `simulate_trades_hires` inside `backtest` (the placebo flips directions there). Set `BAR_MINUTES` (and, for 1m data resampled inside the strategy, `NULL_BARS = 120_000` and `NULL_VOL = 0.00026`) as module constants when the defaults (60-minute bars, 5,000 bars) do not fit.
 
 2. Run the audit:
 
@@ -29,12 +29,12 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
    | Check | What it does | Catches |
    |---|---|---|
    | `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jump) and re-runs `signals`. A signal at or before the cut must not change. | Leaks that change signals: `shift(-1)`, centered windows, full-sample mean/std/min/max/quantile, `bfill`, zero-phase filters (`filtfilt`), FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample. Probabilistic |
-   | `null_edge` | Runs `backtest` on 20 driftless random walks, where no strategy can make money, and compares with the same trades under coin-flip directions. | Entries before their signal, exits or targets computed from later bars, look-ahead in library code; a backtest biased by the SL-first rule (`warn`) |
-   | `source:BG-04/07/09` | Pattern checks on the file. | Some `bfill`/`backfill` and quantile patterns, entry at close |
+   | `null_edge` | Runs `backtest` on 30 driftless random walks, where no strategy can make money, and compares with the same trades under coin-flip directions. | Entries before their signal, exits or targets computed from later bars, look-ahead in library code; a backtest biased by the SL-first rule (`warn`) |
+   | `source:BG-04/07/09` | BugGuard source patterns | Some backward-fill and full-period quantile patterns, entry at close (pattern matching only) |
 
 3. Report the audit with the result:
    - `fail` on `lookahead`: the backtest is invalid. Do not report its PF or win rate as a result. Show the user the `summary` (it names the likely cause from which bars changed), fix it, and run the audit again.
-   - `fail` on `null_edge`: run it once more with `--seed 1`. A clean strategy fails about once in 100 runs; a real leak fails again. If it fails again, treat it like a look-ahead failure: the summary says whether the strategy makes money on random data (look-ahead) or differs from coin-flip directions (signals misaligned in time).
+   - `fail` on `null_edge`: run it once more with `--seed 1` (different seeds share no random path). A clean strategy fails rarely (none of 360 benchmark runs); a real leak fails again. If it fails again, treat it like a look-ahead failure: the summary says whether the strategy makes money on random data (look-ahead) or differs from coin-flip directions (signals misaligned in time).
    - `warn` on `null_edge`: the SL-first rule (a bar touching both SL and TP counts as SL) makes this backtest pessimistic. Re-run with `simulate_trades_hires` (1m fills) before reporting.
    - `error`: the test could not run (too few signals or trades, a load error). Fix the input; do not treat it as a pass.
    - `pass`: say what was tested. Passing does not prove the absence of bias (survivorship, a leak that never changes a signal, or data errors are not covered).
