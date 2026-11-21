@@ -59,13 +59,15 @@ with v0.5.x before relying on them.
 - **Open entry held one bar more than `max_hold`** — with `open_prices` the
   entry bar counted as held but the timeout came `max_hold` bars after it, so
   a trade was held `max_hold + 1` bars (close entry: `max_hold`). Both now hold
-  `max_hold` bars. `max_hold < 1` now raises.
+  `max_hold` bars, so an open-entry timeout has `hold_bars = max_hold - 1`
+  (it was `max_hold`). `max_hold < 1` now raises.
 - **Custom exits filled at the close that produced the exit signal** — the
   same optimism as entering at the signal bar's close. With `open_prices` the
   exit now fills at the next bar's open.
 - **A bar that opened beyond the TP still counted as SL** when its low later
   touched the SL. The open proves the TP filled first; it is now a TP (at the
-  TP price). Applies with `open_prices`, in the rr, trailing and SAR modes.
+  TP price). Applies with `open_prices`, to the TP in the rr, trailing and
+  SAR modes (SAR targets keep SL priority).
 - **`simulate_trades_hires` accepted timestamps in other units** — with
   milliseconds or `datetime64[ns]` the 59-minute look-ahead came back silently
   (found in review). `datetime64` is now converted; a bar spacing that does
@@ -105,18 +107,24 @@ with v0.5.x before relying on them.
 - **Strategy audit** (`backtest_engine/audit.py`, `python -m backtest_engine.audit
   file.py [--json]`). `check_lookahead` rewrites the bars after a cut point
   four ways and re-runs the signal function; any change at or before the cut
-  is look-ahead. `check_null_edge` runs the whole backtest on driftless random
-  walks and tests the mean R per trade across paths. On a labeled benchmark of
-  25 strategies (`bench/`), the two together caught all 16 planted leaks with
-  no false alarm on 9 clean ones; on real EURUSD 1h data the look-ahead
-  verdicts were the same. An LLM (Claude Sonnet) reading each strategy file
-  caught 15; it missed a leak inside an imported helper (the pre-v0.6.0 hires
-  mapping), which `check_null_edge` found.
+  is look-ahead (half the cuts sit on or just before signal bars, so rare
+  signals are tested; float noise is tolerated with `rtol`). `check_null_edge`
+  runs the whole backtest on driftless random walks whose bar extremes come
+  from a Brownian bridge (fair stop/target fills), tests the mean R before
+  costs across paths, and compares with the same trades under coin-flip
+  directions. On a labeled benchmark of 25 strategies (`bench/`), the two
+  together caught all 16 planted leaks with no false alarm on 9 clean ones;
+  on real EURUSD 1h data the look-ahead verdicts were the same; a clean
+  strategy fails `null_edge` in about 1% of runs (1/90). An LLM (Claude
+  Sonnet) reading each strategy file caught 15; it missed a leak inside an
+  imported helper whose source it was not shown, which `check_null_edge`
+  found.
 - `AGENTS.md`: how an AI assistant should backtest with this library (write
   `signals`/`backtest`, run the audit, do not report a failing result).
 - `TradeResults` has a `signal_bar` field (same timeframe as `entry_bar`).
-  For `simulate_trades_hires` it is the last execution bar inside the signal
-  bar, so `entry_bar > signal_bar` for every filled trade.
+  For `simulate_trades_hires` it is the execution bar just before the entry
+  bar (normally the last one inside the signal bar), so `entry_bar >
+  signal_bar` for every filled trade.
 - `DataQualityWarning`: emitted when bars open outside their own high/low
   (`simulate_trades` with `open_prices`), when signals close outside the
   execution data, or when a gap in the execution data delays an entry
@@ -146,7 +154,7 @@ with v0.5.x before relying on them.
 
 ### Tests
 
-- 343 → 444. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
+- 343 → 461. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
   `tests/test_utils.py` (`load_ohlcv`, `resample_ohlcv`, `find_signal_bar`),
   hires timing, coverage and timestamp units, Gate 0 trade checks (including
   overlapping 1h trades, which must not block), Gate 2 same-combo rule,

@@ -313,8 +313,8 @@ def check_expanding_quantile(source_path: str | Path) -> CheckResult:
     # Look for np.percentile/quantile on full arrays without expanding window
     suspicious = []
     for pattern in [
-        r'np\.percentile\([^,]+,',
-        r'np\.quantile\([^,]+,',
+        r'np\.(?:nan)?percentile\([^,]+,',
+        r'np\.(?:nan)?quantile\([^,]+,',
         r'\.quantile\(',
         r'\.percentile\(',
     ]:

@@ -11,7 +11,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 1.05,
+    "null_t": 0.94,
     "sec": 0.4
   },
   {
@@ -26,8 +26,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 3.04,
-    "sec": 0.2
+    "null_t": 4.2,
+    "sec": 0.3
   },
   {
     "case": "s03",
@@ -41,7 +41,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 52.8,
+    "null_t": 36.4,
     "sec": 0.1
   },
   {
@@ -56,8 +56,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 71.98,
-    "sec": 0.7
+    "null_t": 58.46,
+    "sec": 0.8
   },
   {
     "case": "s05",
@@ -71,9 +71,9 @@
     "null": false,
     "any": true,
     "errors": [],
-    "lookahead_cuts": 4,
-    "null_t": 0.71,
-    "sec": 0.6
+    "lookahead_cuts": 5,
+    "null_t": 1.44,
+    "sec": 0.8
   },
   {
     "case": "s06",
@@ -86,9 +86,9 @@
     "null": true,
     "any": true,
     "errors": [],
-    "lookahead_cuts": 32,
-    "null_t": 96.1,
-    "sec": 2.5
+    "lookahead_cuts": 30,
+    "null_t": 94.73,
+    "sec": 3.1
   },
   {
     "case": "s07",
@@ -102,7 +102,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 37.62,
+    "null_t": 21.2,
     "sec": 0.1
   },
   {
@@ -117,7 +117,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": -11.69,
+    "null_t": -9.87,
     "sec": 0.1
   },
   {
@@ -132,7 +132,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": -0.43,
+    "null_t": 0.02,
     "sec": 0.2
   },
   {
@@ -147,7 +147,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 18.81,
+    "null_t": 18.2,
     "sec": 0.1
   },
   {
@@ -162,7 +162,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 20,
-    "null_t": -0.17,
+    "null_t": -0.06,
     "sec": 0.2
   },
   {
@@ -177,7 +177,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 13,
-    "null_t": 17.7,
+    "null_t": 11.56,
     "sec": 0.3
   },
   {
@@ -192,7 +192,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 97.74,
+    "null_t": 85.89,
     "sec": 0.1
   },
   {
@@ -207,7 +207,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 1.49,
+    "null_t": 0.57,
     "sec": 0.1
   },
   {
@@ -222,7 +222,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 149.54,
+    "null_t": 103.62,
     "sec": 0.2
   },
   {
@@ -237,7 +237,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 4.59,
+    "null_t": 4.12,
     "sec": 0.1
   },
   {
@@ -252,7 +252,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.2,
+    "null_t": 0.05,
     "sec": 0.5
   },
   {
@@ -267,7 +267,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 1.1,
+    "null_t": -0.94,
     "sec": 0.2
   },
   {
@@ -282,7 +282,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 1.61,
+    "null_t": 0.65,
     "sec": 0.1
   },
   {
@@ -291,13 +291,13 @@
     "leak": true,
     "kind": "full_period_stat",
     "layer": "signal",
-    "static": false,
+    "static": true,
     "lookahead": true,
     "null": false,
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": -0.26,
+    "null_t": -0.41,
     "sec": 0.1
   },
   {
@@ -312,7 +312,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.51,
+    "null_t": -0.5,
     "sec": 0.5
   },
   {
@@ -327,7 +327,7 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": 32,
-    "null_t": 1.59,
+    "null_t": 0.78,
     "sec": 0.1
   },
   {
@@ -342,8 +342,8 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": 0,
-    "null_t": 0.19,
-    "sec": 0.8
+    "null_t": 1.88,
+    "sec": 1.0
   },
   {
     "case": "s24",
@@ -358,8 +358,8 @@
     "any": true,
     "errors": [],
     "lookahead_cuts": null,
-    "null_t": -5.91,
-    "sec": 1.6
+    "null_t": -4.48,
+    "sec": 0.4
   },
   {
     "case": "s25",
@@ -373,7 +373,7 @@
     "any": false,
     "errors": [],
     "lookahead_cuts": null,
-    "null_t": 0.5,
-    "sec": 1.6
+    "null_t": 1.89,
+    "sec": 0.4
   }
 ]

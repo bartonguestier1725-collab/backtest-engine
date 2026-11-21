@@ -98,7 +98,7 @@ results = simulate_trades_hires(
 )
 ```
 
-**Timing.** Timestamps are bar open times (as returned by `fetch_aggvault`). A signal on the 10:00 1h bar is known when that bar closes at 11:00, so the trade enters at the open of the 11:00 1m bar. `results["signal_bar"]` is the last 1m bar inside the signal bar (10:59), so `entry_bar > signal_bar` for every filled trade. Signals that close outside the 1m data come back as `NO_FILL` with a `DataQualityWarning`. Timestamps must be Unix seconds (`datetime64` arrays are converted); if the usual bar spacing does not match `signal_bar_minutes` / `exec_bar_minutes` (milliseconds, or 5m data without `exec_bar_minutes=5`), it raises. `max_hold` and `retrace_timeout` are given in signal bars.
+**Timing.** Timestamps are bar open times (as returned by `fetch_aggvault`). A signal on the 10:00 1h bar is known when that bar closes at 11:00, so the trade enters at the open of the 11:00 1m bar. `results["signal_bar"]` is the 1m bar just before the entry bar (normally the last one inside the signal bar, 10:59), so `entry_bar > signal_bar` for every filled trade. Signals that close outside the 1m data come back as `NO_FILL` with a `DataQualityWarning`. Timestamps must be Unix seconds (`datetime64` arrays are converted); if the usual bar spacing does not match `signal_bar_minutes` / `exec_bar_minutes` (milliseconds, or 5m data without `exec_bar_minutes=5`), it raises. `max_hold` and `retrace_timeout` are given in signal bars.
 
 **How much it changes results.** On EURUSD RSI(14) 30/70, 2024, SL 2×ATR / TP 4×ATR (696 trades, [`examples/rsi_reversal/compare_1h_vs_hires.py`](examples/rsi_reversal/compare_1h_vs_hires.py)):
 
@@ -130,12 +130,12 @@ For this strategy the two are close. The difference can be larger when SL/TP are
 ### Fill rules
 
 - **Entry**: next bar's open (`open_prices` given), signal bar's close (not given), or the limit price (`retrace_pct`).
-- **Same bar touches SL and TP**: SL (conservative), unless the bar opened beyond the TP (then TP: the open came first). Use `simulate_trades_hires()` to resolve the order.
+- **Same bar touches SL and TP**: SL (conservative), unless the bar opened beyond the TP (then TP: the open came first; SAR targets keep SL priority). Use `simulate_trades_hires()` to resolve the order.
 - **Stops on a gap**: a stop (SL, breakeven, trailing) on a bar that opens beyond it fills at that open, not at the stop price, so a loss can exceed 1R. Needs `open_prices` (`simulate_trades_hires` always passes them); without them the stop price is used.
 - **TP and SAR targets**: fill at their price even on a gap (conservative).
 - **Limit (retrace) fill bar**: only the SL is checked on the bar where the limit fills; whether the high/low that would hit TP came before or after the fill is unknowable.
 - **Custom exits** (`exit_mode="custom"`): the exit signal is known at the close of its bar, so with `open_prices` the exit fills at the next bar's open; without them, at that close.
-- **Timeout**: a trade is held `max_hold` bars and exits at the close of the last one. With next-bar-open entry the entry bar is the first of them; with close or limit entry, the bar after.
+- **Timeout**: a trade is held `max_hold` bars and exits at the close of the last one. With next-bar-open entry the entry bar is the first of them (so `hold_bars = exit_bar - entry_bar = max_hold - 1`); with close or limit entry, the bar after (`hold_bars = max_hold`).
 
 All prices must be consistent: if any bar opens outside its own high/low, `simulate_trades()` emits a `DataQualityWarning`.
 
@@ -274,13 +274,13 @@ uv run python -m backtest_engine.audit my_strategy.py          # or --json; --cs
 
 | Check | How | Catches |
 |---|---|---|
-| `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jumps) and re-runs `signals`. A signal at or before the cut must not change. 32 cuts by default | `shift(-1)`, centered windows, full-sample mean/std/min/max/quantiles, `bfill`, zero-phase filters, FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample |
-| `null_edge` | Runs `backtest` on 20 driftless random walks (bars cut from a finer path, so fills are fair) and tests the mean R per trade across paths | Entries before the signal bar, exits or targets that use later bars, timing bugs inside libraries |
+| `lookahead` | Rewrites every bar after a cut point (mirror, 2× moves, ±20–25% jumps; volume is scaled too) and re-runs `signals`. A signal at or before the cut must not change. 32 cuts, half of them on or just before bars with a signal | Leaks that change signals: `shift(-1)`, centered windows, full-sample mean/std/min/max/quantiles, `bfill`, zero-phase filters, FFT over the sample, pivots confirmed by later bars, the current (unfinished) higher-timeframe bar, models fitted on the whole sample. Probabilistic: a leak that rarely flips a signal can pass |
+| `null_edge` | Runs `backtest` on 20 driftless random walks and tests the mean R per trade before costs across paths. Each bar's high/low come from a continuous (Brownian bridge) path, so stops and targets fill at their level fairly. If `backtest` calls `signals`, the same trades with coin-flip directions are run as a placebo (same entries, exits, sizing) | Entries placed before their signal, exits or targets that use later bars, timing bugs inside libraries; and a backtest made pessimistic by the SL-first rule (`warn`) |
 | `source:BG-04/07/09` | BugGuard source patterns | `bfill`, full-period quantiles, entry at close |
 
-Exit code 1 on `fail`, 2 on `error`. In Python: `from backtest_engine.audit import check_lookahead, check_null_edge`.
+Exit code 1 on `fail`, 2 on `error`. In Python: `from backtest_engine.audit import check_lookahead, check_null_edge`. `null_edge` uses a t-test at |t| > 3, so a clean strategy fails about once in 100 runs (1 of 90 on the benchmark); a real leak fails again with another `--seed`.
 
-On the [benchmark](bench/README.md) (16 strategies with a planted leak, 9 without), the two checks together caught all 16 with no false alarm. An LLM reading the strategy file caught 15; it missed the one leak that sits in an imported helper (the pre-v0.6.0 `simulate_trades_hires`), which `null_edge` found without reading code. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
+On the [benchmark](bench/README.md) (16 strategies with a planted leak, 9 without), the two checks together caught all 16 with no false alarm. An LLM reading each strategy file caught 15. It missed the one leak inside an imported helper whose source it was not shown (the pre-v0.6.0 `simulate_trades_hires`, described in the prompt as documented); `null_edge` found it without reading code, and the LLM found it once given the helper's source. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
 
 ## GateKeeper
 
@@ -560,7 +560,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 uv run pytest
 ```
 
-444 tests, all passing.
+461 tests, all passing.
 
 ## License
 

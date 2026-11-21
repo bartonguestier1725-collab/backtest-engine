@@ -168,7 +168,7 @@ class TestGate0TradeChecks:
         result = gk.gate0_validate(trades=trades, sl_distances=a[sb] * 2,
                                    avg_price=float(np.median(close)))
         assert result.passed
-        assert "OVERLAPPING TRADES" in capsys.readouterr().out
+        assert "ENTRY ON PREVIOUS EXIT BAR" in capsys.readouterr().out
 
     def test_entry_mode_inferred_when_metadata_lost(self, capsys):
         trades, _, _ = _sim_trades(open_entry=False)

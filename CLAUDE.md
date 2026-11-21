@@ -10,7 +10,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 
 1. **HTMLレポート生成**: 「HTMLレポートも生成しますか？PnL分布・月次損益・Exit内訳・年別損益が自動で入ります」
 2. **先読みの検査（audit）**: 結果を報告する前に、戦略を `signals(data)` と `backtest(data)` の2関数のファイルにして `uv run python -m backtest_engine.audit 戦略.py --json` を回す（詳しくは下の「戦略の検証」）。fail なら PF や勝率を結果として報告しない
-3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=1)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))`。hires なら resolution_minutes=1）。渡すと取引数・取引の重なり・SLなし・始値エントリー・固定コストの検査が回る。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）
+3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))`。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・取引の重なり・SLなし・始値エントリー・固定コストの検査が回る。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
@@ -105,11 +105,13 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 
 ### 戦略の検証（audit）
 
-`backtest_engine.audit` は、コードを読まずに動きで先読みを調べる。AI がコードを読んで確かめるのとは別に必ず回す（問題集では、AI が読んでも分からないライブラリの中の先読みを、これだけが見つけた。`bench/README.md`）。
+`backtest_engine.audit` は、コードを読まずに動きで先読みを調べる。AI がコードを読んで確かめるのとは別に回す（問題集では、AI に中身を見せなかったライブラリの中の先読みを、これが見つけた。`bench/README.md`）。
 
-- `lookahead`: ある足より後のデータだけを書き換えてシグナルを作り直し、それより前のシグナルが変わったら先読み。`reach_bars` が0〜2なら次の足を見ている、大きければ全期間の平均・分位点・フィルタなど
-- `null_edge`: エッジのない乱数の相場で backtest を回す。勝てば（fail）どこかで未来を見ている。大きく負ければ（warn）エントリーの時刻ずれが多い
-- fail の結果は報告しない。原因を直して回し直す。pass でも「先読みが無いことの証明ではない」と添える
+- `lookahead`: ある足より後のデータだけを書き換えてシグナルを作り直し、それより前のシグナルが変わったら先読み。summary に、どの足が変わったかから推した原因が出る。確率的な検査で、まれにしかシグナルを変えない先読みは通ることがある
+- `null_edge`: エッジのない乱数の相場で backtest を回し、同じ取引の向きを硬貨投げにした版とも比べる。勝つ・硬貨投げと違う → fail（先読みか時刻ずれ）。負けるが硬貨投げと同じ → warn（1本の足でSLとTPの両方に触れるときSLを優先する規則で悲観側に偏っている。hires で回し直す）
+- null_edge の fail は `--seed 1` でもう一度回す（先読みのない戦略でも100回に1回ほど出る。本物の先読みならまた出る）
+- fail の結果は報告しない。原因を直して回し直す。error は検査ができていない（合格ではない）。pass でも「先読みが無いことの証明ではない」と添える
+- backtest は signals(data) を呼んで使う形にする（硬貨投げの版に差し替えるため）
 - 英語の手順は `AGENTS.md`（Claude 以外の AI も読む）
 
 ### Numba 制約

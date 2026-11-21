@@ -412,3 +412,11 @@ class TestIncompleteBars:
         ts = np.array([0, 3600, 3600], dtype=np.int64)
         report = run_all_checks(timestamps=ts, strict=False, _suppress_print=True)
         assert any(r.check_id == "BG-10" and not r.passed for r in report.results)
+
+
+class TestNanQuantile:
+    def test_nanquantile_flagged(self, tmp_path):
+        from backtest_engine.bug_guard import check_expanding_quantile
+        src = tmp_path / "s.py"
+        src.write_text("thr = np.nanquantile(a, 0.7)\n")
+        assert not check_expanding_quantile(src).passed

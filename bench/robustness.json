@@ -109,7 +109,7 @@
     "leak": true,
     "real_eurusd_1h": "fail",
     "lookahead_fail_of_5_seeds": 5,
-    "null_flag_of_3_seeds": 2
+    "null_flag_of_3_seeds": 3
   },
   "s17": {
     "name": "vol_regime_expanding",

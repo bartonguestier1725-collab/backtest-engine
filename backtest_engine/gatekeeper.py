@@ -270,10 +270,11 @@ class GateKeeper:
             if same:
                 report.results.append(CheckResult(
                     "BG-08", False,
-                    f"OVERLAPPING TRADES: {same} trades enter on the bar where the "
-                    f"previous trade exits. Trades are simulated independently, so this "
-                    f"is not a look-ahead; if the live strategy holds one position at a "
-                    f"time, filter the signals so each entry comes after the previous exit.",
+                    f"ENTRY ON PREVIOUS EXIT BAR: {same} trades enter on the bar where "
+                    f"the previous trade exits, so the two are open at the same time "
+                    f"within that bar. Trades are simulated independently, so this is not "
+                    f"a look-ahead; if the live strategy holds one position at a time, "
+                    f"filter the signals so each entry comes after the previous exit.",
                     severity="WARN",
                 ))
             else:

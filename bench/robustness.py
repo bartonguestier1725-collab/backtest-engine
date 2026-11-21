@@ -28,20 +28,22 @@ if os.environ.get("AGGVAULT_KEY"):
 labels = json.loads((HERE / "labels.json").read_text())
 out = {}
 for cid, lab in sorted(labels.items()):
-    mod = audit._load_module(HERE / "cases" / f"{cid}.py")
-    row = {"name": lab["name"], "leak": lab["leak"]}
-    if hasattr(mod, "signals"):
-        if real is not None:
-            r = audit.check_lookahead(mod.signals, real, n_cuts=32, seed=0)
-            row["real_eurusd_1h"] = r.verdict
-        seeds = [audit.check_lookahead(mod.signals, None, n_cuts=32, seed=s).verdict for s in range(1, 6)]
-        row["lookahead_fail_of_5_seeds"] = sum(v == "fail" for v in seeds)
-    if hasattr(mod, "backtest"):
-        kw = dict(n_bars=int(getattr(mod, "NULL_BARS", 5000)),
-                  bar_minutes=int(getattr(mod, "BAR_MINUTES", 60)),
-                  vol=float(getattr(mod, "NULL_VOL", 0.002)))
-        nulls = [audit.check_null_edge(mod.backtest, seed=100 * s, **kw).verdict for s in range(1, 4)]
-        row["null_flag_of_3_seeds"] = sum(v in ("fail", "warn") for v in nulls)
-    out[cid] = row
-    print(cid, row, flush=True)
+    with audit._strategy_module(HERE / "cases" / f"{cid}.py") as mod:
+        row = {"name": lab["name"], "leak": lab["leak"]}
+        if hasattr(mod, "signals"):
+            if real is not None:
+                r = audit.check_lookahead(mod.signals, real, n_cuts=32, seed=0)
+                row["real_eurusd_1h"] = r.verdict
+            seeds = [audit.check_lookahead(mod.signals, None, n_cuts=32, seed=s).verdict for s in range(1, 6)]
+            row["lookahead_fail_of_5_seeds"] = sum(v == "fail" for v in seeds)
+        if hasattr(mod, "backtest"):
+            kw = dict(n_bars=int(getattr(mod, "NULL_BARS", 5000)),
+                      bar_minutes=int(getattr(mod, "BAR_MINUTES", 60)),
+                      vol=float(getattr(mod, "NULL_VOL", 0.002)))
+            placebo = audit._make_placebo(mod) if hasattr(mod, "signals") else None
+            nulls = [audit.check_null_edge(mod.backtest, seed=100 * s, placebo_fn=placebo, **kw).verdict
+                     for s in range(1, 4)]
+            row["null_flag_of_3_seeds"] = sum(v in ("fail", "warn") for v in nulls)
+        out[cid] = row
+        print(cid, row, flush=True)
 (HERE / "robustness.json").write_text(json.dumps(out, indent=2) + "\n")
