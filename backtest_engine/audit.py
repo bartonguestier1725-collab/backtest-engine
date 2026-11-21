@@ -82,8 +82,9 @@ class AuditResult:
 def _as_data(data) -> dict:
     """Accept a dict with open/high/low/close (time, volume optional) or the
     6-tuple returned by fetch_aggvault / load_ohlcv."""
-    if isinstance(data, dict):
-        d = {k: np.asarray(v) for k, v in data.items()}
+    from collections.abc import Mapping
+    if isinstance(data, Mapping):
+        d = {k: np.asarray(data[k]) for k in data.keys()}
     else:
         ts, o, h, l, c = data[:5]
         d = {"time": np.asarray(ts), "open": np.asarray(o), "high": np.asarray(h),
@@ -568,10 +569,14 @@ def _audit_in_process(path: Path, data, n_cuts: int, n_paths: int, seed: int,
         check_bfill_in_source, check_expanding_quantile, check_entry_price_type,
     )
     results: list[AuditResult] = []
-    for chk in (check_bfill_in_source, check_expanding_quantile, check_entry_price_type):
-        r = chk(path)
-        verdict = "pass" if r.passed else ("fail" if r.severity == "ERROR" else "warn")
-        results.append(AuditResult(f"source:{r.check_id}", verdict, r.message))
+    try:
+        for chk in (check_bfill_in_source, check_expanding_quantile, check_entry_price_type):
+            r = chk(path)
+            verdict = "pass" if r.passed else ("fail" if r.severity == "ERROR" else "warn")
+            results.append(AuditResult(f"source:{r.check_id}", verdict, r.message))
+    except Exception as e:  # unreadable file, a folder, a non-UTF-8 source
+        return _report(path, [AuditResult(
+            "strategy_file", "error", f"could not read {path}: {type(e).__name__}: {e}")])
     try:
         with _strategy_module(path) as mod:
             try:
@@ -629,7 +634,11 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     to a temporary file. ``isolate=False`` runs in this process and reuses any
     module the caller already imported under the same name. ``seed=None``
     picks a random seed (reported in ``seed``). ``timeout`` (seconds) turns a
-    hanging strategy into an ``error`` report.
+    hanging strategy into an ``error`` report (the child and any process it
+    started are killed).
+
+    The audit is not a sandbox: strategy code runs with your permissions and
+    could fake its own report. Audit code you are willing to run.
     """
     path = Path(path)
     if seed is None:
@@ -645,28 +654,59 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
         return rep
     import os
     import pickle
+    import signal
     import subprocess
     import tempfile
-    with tempfile.TemporaryDirectory(prefix="bt_audit_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="bt_audit_") as tmp:  # mode 0700
         out = Path(tmp) / "report.json"
-        cmd = [sys.executable, "-m", "backtest_engine.audit", str(path.resolve()),
+        # -P: do not put the current folder first on the child's sys.path
+        # (a backtest_engine/ or json.py there would be imported instead).
+        cmd = [sys.executable, "-P", "-m", "backtest_engine.audit", str(path.resolve()),
                "--json-out", str(out), "--cuts", str(int(n_cuts)), "--paths", str(int(n_paths)),
                "--seed", str(int(seed)), "--rtol", repr(float(rtol))]
         if data is not None:
             pkl = Path(tmp) / "data.pkl"
-            with open(pkl, "wb") as fh:
-                pickle.dump(data, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            try:
+                with open(pkl, "wb") as fh:
+                    pickle.dump(data, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception as e:
+                return _report(path, [AuditResult(
+                    "data", "error",
+                    f"data could not be passed to the audit process ({type(e).__name__}: {e}); "
+                    f"use plain numpy columns, or isolate=False")], seed)
             cmd += ["--data-pkl", str(pkl)]
         env = dict(os.environ)
-        lib_root = str(Path(__file__).resolve().parents[1])  # run this copy of the library
-        env["PYTHONPATH"] = lib_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env["PYTHONIOENCODING"] = "utf-8"
+        # Run this copy of the library: expose only the backtest_engine package
+        # (via a link in the temp dir), not its parent folder.
+        pkg = Path(__file__).resolve().parent
+        link_dir = Path(tmp) / "lib"
+        link_dir.mkdir()
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", env=env, timeout=timeout)
+            (link_dir / pkg.name).symlink_to(pkg, target_is_directory=True)
+            extra = str(link_dir)
+        except OSError:  # no symlinks (e.g. Windows without privileges)
+            extra = None if _installed(__file__) else str(pkg.parent)
+        if extra:
+            env["PYTHONPATH"] = extra + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        popen_kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                    if os.name == "nt" else {"start_new_session": True})
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", env=env, **popen_kw)
+        try:
+            _, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)  # the child and anything it started
+                except ProcessLookupError:
+                    pass
+            _, stderr = proc.communicate()
             return _report(path, [AuditResult(
-                "strategy_file", "error", f"the audit did not finish within {timeout} s")], seed)
+                "strategy_file", "error", f"the audit did not finish within {timeout} s",
+                {"stderr": (stderr or "")[-2000:]})], seed)
         if out.exists():
             try:
                 rep = json.loads(out.read_text(encoding="utf-8"))
@@ -678,7 +718,7 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
     return _report(path, [AuditResult(
         "strategy_file", "error",
         f"the audit process exited with code {proc.returncode} without a report",
-        {"stderr": proc.stderr[-2000:]})], seed)
+        {"stderr": (stderr or "")[-2000:]})], seed)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -700,14 +740,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     if a.csv:
         from backtest_engine.utils import load_ohlcv
         data = load_ohlcv(a.csv)
-    elif a.data_pkl:
+    report = None
+    if a.data_pkl:
         import pickle
-        with open(a.data_pkl, "rb") as fh:  # written by audit_strategy in a private temp dir
-            data = pickle.load(fh)
-    report = _audit_in_process(Path(a.strategy), data, a.cuts, a.paths, a.seed, a.rtol)
+        try:
+            with open(a.data_pkl, "rb") as fh:  # written by audit_strategy in a private temp dir
+                data = pickle.load(fh)
+        except Exception as e:
+            report = _report(Path(a.strategy), [AuditResult(
+                "data", "error",
+                f"data could not be read in the audit process ({type(e).__name__}: {e}); "
+                f"use plain numpy columns, or isolate=False")])
+    if report is None:
+        report = _audit_in_process(Path(a.strategy), data, a.cuts, a.paths, a.seed, a.rtol)
     report["seed"] = a.seed
     if a.json_out:
-        Path(a.json_out).write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        Path(a.json_out).write_text(json.dumps(report), encoding="utf-8")  # ASCII-escaped
     if a.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     elif not a.json_out:

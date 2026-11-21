@@ -493,3 +493,70 @@ class TestAuditStrategyIsolation:
         body = "import time\ndef signals(data):\n    time.sleep(60)\n"
         rep = audit_strategy(self._file(tmp_path, body), n_cuts=8, n_paths=10, timeout=10)
         assert rep["overall"] == "error" and "did not finish" in rep["results"][-1]["summary"]
+
+
+class TestAuditStrategyIsolationEdges:
+    CLEAN = TestStrategyFile.CLEAN
+
+    def test_current_folder_cannot_shadow_the_library(self, tmp_path, monkeypatch):
+        fake = tmp_path / "cwd" / "backtest_engine"
+        fake.mkdir(parents=True)
+        (fake / "__init__.py").write_text("")
+        (fake / "audit.py").write_text(
+            "import sys, json\n"
+            "out = sys.argv[sys.argv.index('--json-out') + 1]\n"
+            "open(out, 'w').write(json.dumps({'file': '', 'overall': 'forged', 'results': []}))\n")
+        (tmp_path / "cwd" / "json.py").write_text("raise RuntimeError('shadowed json')\n")
+        f = tmp_path / "strat.py"
+        f.write_text(self.CLEAN)
+        monkeypatch.chdir(tmp_path / "cwd")
+        assert audit_strategy(f, n_cuts=8, n_paths=10)["overall"] == "pass"
+
+    def test_unpicklable_data_is_error_report(self, tmp_path):
+        f = tmp_path / "strat.py"
+        f.write_text(self.CLEAN)
+        d = random_walk_bars(500)
+        d["fn"] = np.array([lambda: 1] * 500, dtype=object)
+        rep = audit_strategy(f, data=d, n_cuts=8, n_paths=10)
+        assert rep["overall"] == "error" and rep["results"][0]["check"] == "data"
+
+    def test_mapping_data(self, tmp_path):
+        from types import MappingProxyType
+        f = tmp_path / "strat.py"
+        f.write_text(self.CLEAN)
+        rep = audit_strategy(f, data=MappingProxyType(random_walk_bars(2000)), n_cuts=8, n_paths=10)
+        assert rep["overall"] == "pass"
+
+    @pytest.mark.parametrize("isolate", [True, False])
+    def test_folder_path_is_error_report(self, tmp_path, isolate):
+        rep = audit_strategy(tmp_path, n_cuts=8, n_paths=10, isolate=isolate)
+        assert rep["overall"] == "error"
+
+    def test_lone_surrogate_message(self, tmp_path):
+        f = tmp_path / "s.py"
+        f.write_text("def signals(data):\n    raise ValueError('bad \\udcff')\n")
+        a = audit_strategy(f, n_cuts=8, n_paths=10)
+        b = audit_strategy(f, n_cuts=8, n_paths=10, isolate=False)
+        assert a["overall"] == b["overall"] == "error"
+        assert [r["check"] for r in a["results"]] == [r["check"] for r in b["results"]]
+
+    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process groups")
+    def test_timeout_kills_grandchildren(self, tmp_path):
+        import os, time
+        marker = tmp_path / "pid.txt"
+        f = tmp_path / "s.py"
+        f.write_text(
+            "import subprocess, sys, time\n"
+            f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+            "def signals(data):\n    time.sleep(120)\n")
+        rep = audit_strategy(f, n_cuts=8, n_paths=10, timeout=8)
+        assert rep["overall"] == "error"
+        pid = int(marker.read_text())
+        time.sleep(0.5)
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        assert not alive
