@@ -775,9 +775,10 @@ def run_all_checks(
                 months *= share
                 basis += f", × n_bars/timestamps = {n_bars}/{len(t)}"
             r = _period_result(months, basis, min_months)
-            if not r.passed and share <= 0.5:
+            if not r.passed and share < 0.6:
                 # More likely two timeframes than a sliced close (1m times
-                # with the 1h n_bars): say that before the period.
+                # with the 1h n_bars; 30m times with a gap give just over
+                # 0.5): say that before the period.
                 r = CheckResult("BG-06", False,
                                 "n_bars and timestamps count different bars? Pass the times "
                                 "of the signal-timeframe bars that n_bars counts (the 1h "

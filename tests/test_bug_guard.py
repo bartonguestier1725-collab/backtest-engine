@@ -566,6 +566,7 @@ class TestDataPeriodFromTimestamps:
         assert not r.passed and r.severity == "ERROR" and "2000/3000" in r.message
         assert r.message.startswith("SHORT PERIOD")  # share 0.67: no timeframe hint
         ts30 = 1609459200 + 1800 * np.arange(2 * 4000, dtype=np.int64)  # 30m times, 1h n_bars
+        ts30 = np.delete(ts30, 100)  # one missing 30m bar: share just over 0.5
         (r,) = self._bg06(n_bars=4000, bar_minutes=60, timestamps=ts30)
         assert r.message.startswith("n_bars and timestamps count different bars?")
 
