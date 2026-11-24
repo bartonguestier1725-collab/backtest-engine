@@ -287,18 +287,27 @@ def check_data_period(
     """BG-06: Verify sufficient data period to avoid short-period overfitting.
 
     If start_ts/end_ts are provided (Unix seconds like the rest of the
-    library, pd.Timestamp or datetime), uses calendar period. Otherwise
-    estimates from bar count assuming FX market hours (~17h/day, ~22
-    days/month ≈ 374 bars/month for 1h).
+    library, pd.Timestamp, datetime64 or datetime), uses calendar period.
+    Otherwise estimates from bar count assuming FX market hours (~17h/day,
+    ~22 days/month ≈ 374 bars/month for 1h).
     """
     if start_ts is not None and end_ts is not None:
         import pandas as pd
 
         def _ts(x):
-            # Numbers are Unix seconds; pd.Timestamp(int) would read nanoseconds.
             if isinstance(x, (int, float, np.integer, np.floating)):
-                return pd.Timestamp(float(x), unit="s")
-            return pd.Timestamp(x)
+                # Numbers are Unix seconds (pd.Timestamp(int) reads ns).
+                # 1e11 s is the year 5138; larger values are ms or ns.
+                if not abs(float(x)) < 1e11:
+                    raise ValueError(
+                        f"check_data_period: {x!r} is not Unix seconds "
+                        "(milliseconds or nanoseconds?). Pass seconds or a Timestamp.")
+                t = pd.Timestamp(float(x), unit="s")
+            else:
+                t = pd.Timestamp(x)
+            if t is pd.NaT:
+                raise ValueError("check_data_period: start_ts/end_ts is NaT")
+            return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
         delta = _ts(end_ts) - _ts(start_ts)
         total_months = delta.days / 30.44

@@ -444,7 +444,7 @@ class GateKeeper:
         oos_frac = wfa_result.get("oos_positive_frac", 0.0)
         wfa_ok = oos_frac >= self.GATE3_MIN_WFA_WINRATE
         checks.append(
-            f"WFA OOS positive splits={oos_frac:.2f} "
+            f"WFA OOS positive split share={oos_frac:.2f} "
             f"({'OK' if wfa_ok else 'FAIL'}, min={self.GATE3_MIN_WFA_WINRATE})"
         )
 
@@ -493,7 +493,8 @@ class GateKeeper:
 
         Checks:
           - MC pass rate (fraction of sims with max DD < dd_limit) >= GATE4_MIN_MC_PASS
-          - Reports DD at confidence percentile and 99th percentile.
+          - DD at the confidence percentile <= dd_limit
+          - Reports the 99th-percentile DD (not a pass condition).
         """
         self._header("Gate 4", "Monte Carlo Drawdown")
         t0 = time.time()

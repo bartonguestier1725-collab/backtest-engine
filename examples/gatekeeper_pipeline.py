@@ -115,14 +115,17 @@ def main():
     gk.GATE3_MAX_PBO = 0.60  # default: 0.40
 
     # Pass one real simulation so the trade-level checks run too
-    # (look-ahead, same-bar reentry, trade count, no-SL, open-price entry).
+    # (entry on the previous exit bar, trade count, no-SL, open-price entry,
+    # fixed cost). Gate 0 does not look for look-ahead: run the audit for that.
     sig, dirs = find_signals(CLOSE, 10, 50)
     sl = ATR_VALS[sig] * 1.5
     baseline = simulate_trades(
         HIGH, LOW, CLOSE, sig, dirs, sl, sl * 2.0, max_hold=100, open_prices=OPEN,
         entry_costs=COST_MODEL.per_trade_cost(["EURUSD"] * len(sig), sl), preflight=False,
     )
-    gk.gate0_validate(trades=baseline, sl_distances=sl, avg_price=float(np.median(CLOSE)))
+    bar_times = 1704067200 + 60 * np.arange(len(CLOSE))  # synthetic 1m bar times
+    gk.gate0_validate(trades=baseline, sl_distances=sl, avg_price=float(np.median(CLOSE)),
+                      timestamps=bar_times)
 
     # ── Gate 1: Quick feasibility (~20 combos) ────────────────────────────
     quick_params = [

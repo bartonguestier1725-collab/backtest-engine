@@ -35,10 +35,12 @@ Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
 - BG-05 no longer quotes "SL=2.0×ATR≈20pip" built from default arguments; it
   quotes the SL only when `check_resolution` is given `sl_atr_mult` and
   `avg_atr_pips`.
-- `check_data_period(start_ts=, end_ts=)` reads numbers as Unix seconds. It
-  read them as nanoseconds and reported 0.0 months.
-- Gate 3's message says "WFA OOS positive splits" (the share of WFA splits
-  with a positive OOS metric), not "win rate".
+- `check_data_period(start_ts=, end_ts=)` reads numbers as Unix seconds (it
+  read them as nanoseconds and reported 0.0 months) and raises on numbers
+  that look like milliseconds or nanoseconds, and on NaT (which passed as
+  "nan months"). Timestamps with and without a time zone can be mixed.
+- Gate 3's message says "WFA OOS positive split share" (the share of WFA
+  splits with a positive OOS metric), not "win rate".
 
 ### Docs
 

@@ -124,8 +124,9 @@ def per_bar_ratio(wfa: dict) -> float:
     edge carries over perfectly."""
     is_len = np.mean([r["is_range"][1] - r["is_range"][0] for r in wfa["splits"]])
     oos_len = np.mean([r["oos_range"][1] - r["oos_range"][0] for r in wfa["splits"]])
-    is_per_bar = wfa["is_mean"] / is_len
-    return (wfa["oos_mean"] / oos_len) / is_per_bar if is_per_bar else 0.0
+    if wfa["is_mean"] <= 0:
+        return float("nan")  # no in-sample edge to carry over
+    return (wfa["oos_mean"] / oos_len) / (wfa["is_mean"] / is_len)
 
 # ── Step 2: BugGuard (教育目的で実行、ブロックはしない) ───────────────
 print("\n" + "=" * 70)
@@ -173,7 +174,9 @@ print(f"  OOS positive frac: {wfa_result['oos_positive_frac']:.1%} of splits pro
 ratio = per_bar_ratio(wfa_result)  # 1.0 = the IS edge per bar carries over
 print(f"  OOS/IS ratio:      {ratio:.2f} (R per bar)")
 
-if ratio < 0.3:
+if np.isnan(ratio):
+    print("  ✗ The best in-sample params do not make money in-sample: no ratio to judge")
+elif ratio < 0.3:
     print(f"  ✗ OOS/IS ratio {ratio:.2f} — OOS is {ratio:.0%} of IS. Severe overfitting.")
 elif ratio < 0.7:
     print(f"  ⚠ OOS/IS ratio {ratio:.2f} — OOS degrades significantly vs IS")
@@ -251,7 +254,7 @@ print(f"""
   Level 2: Optimized to RSI(21) 20/70 → PF={best_pf:.2f} in-sample (looks good!)
   Level 3: WFA + CSCV reveal the truth:
     - PBO: {pbo:.0%} — {'HIGH overfitting probability' if pbo > 0.40 else 'moderate risk' if pbo > 0.20 else 'low risk'}
-    - OOS/IS ratio (R per bar): {ratio:.2f} — {'severe overfitting' if ratio < 0.3 else 'significant degradation' if ratio < 0.7 else 'transfers well'}
+    - OOS/IS ratio (R per bar): {ratio:.2f} — {'no in-sample edge' if np.isnan(ratio) else 'severe overfitting' if ratio < 0.3 else 'significant degradation' if ratio < 0.7 else 'transfers well'}
 
   Conclusion: RSI reversal alone does not produce a robust edge on EURUSD.
   The Level 2 "improvement" was mostly fitting to 2023's range market.

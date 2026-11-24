@@ -14,7 +14,7 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 - **Indicators** — SMA, ATR, RSI, Bollinger Bands, RCI, Parabolic SAR, expanding quantile, multi-timeframe mapping (all `@njit`)
 - **Monte Carlo DD** — 10,000-shuffle drawdown distribution, Kelly criterion, optimal risk sizing, prop firm DD check
 - **StressTest** — block bootstrap (preserves losing-streak autocorrelation), parameter degradation scenarios (win rate / RR / cost what-if)
-- **Walk-Forward / CSCV** — out-of-sample validation with IS/OOS ratio and Probability of Backtest Overfitting (PBO, Bailey 2015)
+- **Walk-Forward / CSCV** — out-of-sample validation with OOS/IS ratio and Probability of Backtest Overfitting (PBO, Bailey 2015)
 - **TradeResults** — structured array with convenience metrics: profit factor, win rate, expectancy, Sharpe/Sortino, max drawdown, recovery factor
 - **Utilities** — CSV loading, AggVault API fetcher, OHLC resampling, higher-TF indicator mapping
 - **Strategy Builder** — time-based entry/exit signal generation with timezone conversion, market-hours filtering, and match reporting
@@ -450,7 +450,7 @@ from backtest_engine import WalkForward, CSCV
 wf = WalkForward(n_bars=len(close), is_ratio=0.7, n_splits=5, anchored=False)
 wf_result = wf.run(param_grid, evaluate_fn)
 print(f"OOS mean: {wf_result['oos_mean']:.3f}R")
-print(f"OOS/IS ratio: {wf_result['is_oos_ratio']:.2f}")  # of window totals: OOS windows are shorter
+print(f"OOS/IS ratio: {wf_result['is_oos_ratio']:.2f}")  # of window totals: ~0.43 at is_ratio=0.7 even with a perfect transfer; divide by window lengths to compare per bar
 
 # CSCV — Probability of Backtest Overfitting (Bailey 2015)
 cscv = CSCV(n_splits=10)

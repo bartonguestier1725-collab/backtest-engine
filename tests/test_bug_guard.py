@@ -449,3 +449,23 @@ class TestCoarseBarsMessage:
         from backtest_engine.bug_guard import check_resolution
         r = check_resolution(60, 1.5, 12.0)
         assert "SL=1.5×ATR≈18pip" in r.message
+
+
+class TestDataPeriodInputs:
+    def test_milliseconds_rejected(self):
+        from backtest_engine.bug_guard import check_data_period
+        with pytest.raises(ValueError, match="not Unix seconds"):
+            check_data_period(100, 60, start_ts=1609459200_000, end_ts=1704067200_000)
+
+    def test_nat_rejected(self):
+        import pandas as pd
+        from backtest_engine.bug_guard import check_data_period
+        with pytest.raises(ValueError, match="NaT"):
+            check_data_period(100, 60, start_ts=pd.NaT, end_ts=pd.Timestamp("2024-01-01"))
+
+    def test_seconds_and_aware_timestamp_mix(self):
+        import pandas as pd
+        from backtest_engine.bug_guard import check_data_period
+        r = check_data_period(100, 60, start_ts=1609459200,
+                              end_ts=pd.Timestamp("2024-01-01", tz="UTC"))
+        assert r.passed and "36.0 months" in r.message
