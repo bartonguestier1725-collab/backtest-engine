@@ -308,9 +308,11 @@ def _period_months(n_bars: int, bar_minutes: int, start_ts=None, end_ts=None) ->
     return months, f"estimated from {n_bars} bars × {bar_minutes}min at FX hours"
 
 
-# About a week: a calendar year of FX data starts after the New Year close
-# and ends on the last Friday, so it measures 11.86-11.99 months (EURUSD and
-# XAUUSD 1h, 2022-2024). The slack lets a full year pass.
+# About a week. Even a gap-free non-leap year is 365 / 30.44 = 11.99 months,
+# and a calendar year of FX data starts after the New Year close and ends at
+# the last close of the year (the Friday when Dec 31 falls on a weekend), so
+# it measures 11.86-11.99 months (EURUSD and XAUUSD 1h, 2022-2024). The
+# slack lets a full year pass.
 _PERIOD_SLACK_MONTHS = 0.25
 
 
@@ -354,9 +356,9 @@ def check_data_period(
     market open every day (crypto, 30.4 days a month) reads about 1.4× too
     long, so pass the dates for those.
     """
-    estimated = start_ts is None or end_ts is None
-    return _period_result(*_period_months(n_bars, bar_minutes, start_ts, end_ts), min_months,
-                          estimated=estimated)
+    months, basis = _period_months(n_bars, bar_minutes, start_ts, end_ts)
+    return _period_result(months, basis, min_months,
+                          estimated=start_ts is None or end_ts is None)
 
 
 def check_expanding_quantile(source_path: str | Path) -> CheckResult:
@@ -762,21 +764,24 @@ def run_all_checks(
         # The bar times give the calendar period; the bar count only estimates it.
         t = np.asarray(timestamps)
         try:
-            months, basis = _period_months(n_bars or len(t), bar_minutes, t.min(), t.max())
+            months, basis = _period_months(0, bar_minutes, t.min(), t.max())
         except (ValueError, TypeError) as e:  # ms/ns, NaN/NaT, naive mixed with aware
             r = CheckResult("BG-06", False, f"BAD TIMESTAMPS: {e}")
         else:
-            fewer = bool(n_bars) and n_bars < len(t)
-            if fewer:
+            share = n_bars / len(t) if n_bars and n_bars < len(t) else 1.0
+            if share < 1.0:
                 # Fewer bars than bar times, e.g. close sliced to a short
                 # window but the full ts passed: count only the bars' share.
-                months *= n_bars / len(t)
+                months *= share
                 basis += f", × n_bars/timestamps = {n_bars}/{len(t)}"
             r = _period_result(months, basis, min_months)
-            if fewer:
-                r = CheckResult("BG-06", False, r.message + " — n_bars and timestamps "
-                                "should count the same signal-timeframe bars.",
-                                severity="WARN" if r.passed else "ERROR")
+            if not r.passed and share < 0.5:
+                # More likely two timeframes than a sliced close (1m times
+                # with the 1h n_bars): say that before the period.
+                r = CheckResult("BG-06", False,
+                                f"n_bars ({n_bars}) and timestamps ({len(t)}) count different "
+                                f"bars? Pass the times of the signal-timeframe bars that "
+                                f"n_bars counts (the 1h times also with hires). " + r.message)
         report.results.append(r)
     elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))

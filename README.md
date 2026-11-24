@@ -125,10 +125,10 @@ For this strategy the two are close. The difference can be larger when SL/TP are
 | `trail_activation_r` | R-multiple required to activate trailing stop (`exit_mode="trailing"` only) |
 | `trail_distance_r` | Trailing stop distance in R-multiples (`exit_mode="trailing"` only) |
 | `exit_signals` / `sar_values` | Exit signal per bar (`"custom"` only) / Parabolic SAR per bar (`"sar_trailing"` only) |
-
-An option of another mode (a non-zero `trail_activation_r` with the default `exit_mode="rr"`, `exit_signals` with `"trailing"`, ...) raises `ValueError`: that mode would ignore it.
 | `open_prices` | Enter at next-bar open instead of signal-bar close (supported in all modes). Also lets stops fill at the open on a gap |
 | `entry_costs` | Per-trade cost array in R-units (e.g. from `BrokerCost.per_trade_cost()`). Subtracted from `pnl_r` post-simulation. `NO_FILL` trades automatically get zero cost |
+
+An option of another mode (a non-zero `trail_activation_r` with the default `exit_mode="rr"`, `exit_signals` with `"trailing"`, ...) raises `ValueError`: that mode would ignore it.
 
 ### Fill rules
 
@@ -211,7 +211,7 @@ expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJ
 
 Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`. BG-05 always runs (it assumes 60-minute fills unless you pass `resolution_minutes`).
 
-The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars), slightly short for FX. A market open fewer hours reads much shorter, and one open every day (crypto) about 1.4× too long, so pass `timestamps` (Unix seconds) to `bug_guard()` / `gk.gate0_validate()`: BG-06 then uses the first and last bar time, and if `n_bars` is smaller than the number of timestamps, it scales the span down by that ratio (a sliced `close` with the full `ts`) and WARNs. Milliseconds are an ERROR.
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars), slightly short for FX pairs and about 6% short for XAUUSD (daily break). A market open fewer hours reads much shorter, and one open every day (crypto) about 1.4× too long, so pass `timestamps` (Unix seconds) to `bug_guard()` / `gk.gate0_validate()`: BG-06 then uses the first and last bar time, and if `n_bars` is smaller than the number of timestamps, it scales the span down by that ratio (a sliced `close` with the full `ts`); an ERROR if that is too short. Milliseconds are an ERROR.
 
 ```python
 from backtest_engine import bug_guard, BrokerCost, EXIT_NO_FILL
@@ -556,7 +556,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Stop gaps** — With `open_prices`, a stop that the market gaps through fills at the open (see [Fill rules](#fill-rules)).
 - **Cost underestimation** — BugGuard BG-02 compares the `spreads_used` you declare with `expected_costs` (pass both; it does not read `entry_costs`). Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
 - **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
-- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months less 1 week of data (11.75 months, so that a calendar year of FX passes: it starts and ends at a weekend or holiday close), taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
+- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months less 1 week of data (11.75 months, so that a calendar year of FX passes: it starts after the New Year close and ends at the last close of the year), taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder converts a fixed UTC offset (`tz_offset_hours`, no daylight saving time).
 
 **NOT handled — your responsibility:**

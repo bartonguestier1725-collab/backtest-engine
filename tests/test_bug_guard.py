@@ -489,8 +489,9 @@ class TestDataPeriodFromTimestamps:
         assert not check_data_period(4520, 60).passed
 
     def test_one_week_of_slack(self):
-        """A calendar year of FX starts after the New Year close and ends on
-        the last Friday: EURUSD 1h 2024 is 2024-01-01 22:00 to 2024-12-31 21:00."""
+        """A calendar year of FX starts after the New Year close and ends at
+        the last close of the year: EURUSD 1h 2024 is 2024-01-01 22:00 to
+        2024-12-31 21:00."""
         from backtest_engine.bug_guard import check_data_period
         r = check_data_period(6240, 60, start_ts=pd.Timestamp("2024-01-01 22:00"),
                               end_ts=pd.Timestamp("2024-12-31 21:00"))
@@ -535,13 +536,28 @@ class TestDataPeriodFromTimestamps:
         assert not r.passed and r.severity == "ERROR"
         assert "SHORT PERIOD: 2.05 months" in r.message and "1500/87600" in r.message
 
-    def test_off_by_one_is_a_warn_in_any_market(self):
+    def test_off_by_one_passes_in_any_market(self):
         """Scaling, not the FX estimate: 3 years of stock hours (7 bars a
-        weekday) with one bar dropped from close must not fail."""
+        weekday) with one bar dropped from close (as BG-10 advises for a
+        forming last bar) must not fail."""
         days = pd.bdate_range("2021-01-04", "2023-12-29")
         ts = np.array([int(d.timestamp()) + 3600 * (14 + h) for d in days for h in range(7)])
         (r,) = self._bg06(n_bars=len(ts) - 1, bar_minutes=60, timestamps=ts)
-        assert not r.passed and r.severity == "WARN" and "35.78 months" in r.message
+        assert r.passed and "35.78 months" in r.message and "5459/5460" in r.message
+
+    def test_two_timeframes_are_named_first(self):
+        """hires mix-up: 1h n_bars with the 1m times (EURUSD 2022 size)."""
+        ts = 1641160800 + 60 * np.arange(6216 * 60, dtype=np.int64)
+        (r,) = self._bg06(n_bars=6216, bar_minutes=60, timestamps=ts)
+        assert not r.passed and r.severity == "ERROR"
+        assert r.message.startswith("n_bars (6216) and timestamps (372960) count different bars?")
+
+    def test_span_runs_to_the_last_bars_close(self):
+        from backtest_engine.bug_guard import check_data_period
+        t0 = 1609459200
+        end = t0 + round(11.75 * 30.44 * 86400) - 1800   # last open 30 min before the floor
+        assert check_data_period(1, 60, start_ts=t0, end_ts=end).passed      # its 1h bar closes after
+        assert not check_data_period(1, 1, start_ts=t0, end_ts=end).passed   # a 1m bar does not
 
     def test_short_calendar_and_fewer_bars_is_error(self):
         ts = 1609459200 + 3600 * np.arange(3000, dtype=np.int64)  # ~4 months

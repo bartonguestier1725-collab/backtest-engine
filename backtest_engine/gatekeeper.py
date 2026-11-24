@@ -78,7 +78,8 @@ class GateKeeper:
              ``timestamps``; the 1h bars also for simulate_trades_hires).
              BG-06 estimates the period from it at FX hours when Gate 0 gets
              no ``timestamps``; if it is smaller than ``len(timestamps)``,
-             the timestamp span is scaled down by the ratio (WARN).
+             the timestamp span is scaled down by the ratio (an ERROR if
+             that is too short, and Gate 0 raises).
     bar_minutes : Bar size in minutes (for the data period estimate and BG-10).
     resolution_minutes : Bar size (minutes) the SL/TP fills were simulated on
                          (1 for simulate_trades_hires on 1m bars). If None,

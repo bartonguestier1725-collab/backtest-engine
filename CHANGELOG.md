@@ -27,7 +27,7 @@ change. Some metrics and checks do (first section).
   to the last bar's close; timestamps in milliseconds or nanoseconds are a BG-06 ERROR (and
   BG-10 reports times that are not numbers instead of raising). With
   fewer `n_bars` than timestamps (a sliced `close` with the full `ts`), the
-  span is scaled down by `n_bars`/timestamps and a pass is a WARN. Without
+  span is scaled down by `n_bars`/timestamps. Without
   timestamps the estimate is 24 h × 22 days a month (528 1h bars), not
   17 h × 22 days (374): FX trades about 21.7 days of 24 h, so the old
   estimate read 8.7 months of AggVault EURUSD 1h as 12.1 months and passed
@@ -35,8 +35,8 @@ change. Some metrics and checks do (first section).
   except for markets open every day (crypto reads about 1.4× long: pass
   timestamps). Data that passed before can now fail, e.g. 300,000 1m bars
   (9.5 months). BG-06 passes at 12 months less 1 week (11.75): a calendar
-  year of FX data starts after the New Year close and ends on the last
-  Friday, so it measures 11.86–11.99 months (EURUSD and XAUUSD 1h,
+  year of FX data starts after the New Year close and ends at the last
+  close of the year, so it measures 11.86–11.99 months (EURUSD and XAUUSD 1h,
   2022–2024) and would fail a strict 12. Periods are shown with two
   decimals, and a failure on the estimate says to pass the bar times.
 - **`simulate_trades` raises on options of another exit mode.** Each mode
