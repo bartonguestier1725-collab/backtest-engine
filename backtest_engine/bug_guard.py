@@ -343,8 +343,8 @@ def check_data_period(
     """BG-06: Verify sufficient data period to avoid short-period overfitting.
 
     Passes at ``min_months`` less 1 week (11.75 for 12), so that a calendar
-    year of FX data, which starts and ends at a weekend or holiday close,
-    passes.
+    year of FX data, which starts after the New Year close and ends at the
+    last close of the year, passes.
 
     If start_ts/end_ts are provided (the first and last bar open times: Unix
     seconds like the rest of the library, pd.Timestamp, datetime64 or
@@ -775,13 +775,13 @@ def run_all_checks(
                 months *= share
                 basis += f", × n_bars/timestamps = {n_bars}/{len(t)}"
             r = _period_result(months, basis, min_months)
-            if not r.passed and share < 0.5:
+            if not r.passed and share <= 0.5:
                 # More likely two timeframes than a sliced close (1m times
                 # with the 1h n_bars): say that before the period.
                 r = CheckResult("BG-06", False,
-                                f"n_bars ({n_bars}) and timestamps ({len(t)}) count different "
-                                f"bars? Pass the times of the signal-timeframe bars that "
-                                f"n_bars counts (the 1h times also with hires). " + r.message)
+                                "n_bars and timestamps count different bars? Pass the times "
+                                "of the signal-timeframe bars that n_bars counts (the 1h "
+                                "times also with hires). " + r.message)
         report.results.append(r)
     elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))

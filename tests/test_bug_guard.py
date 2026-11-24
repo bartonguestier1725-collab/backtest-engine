@@ -550,7 +550,8 @@ class TestDataPeriodFromTimestamps:
         ts = 1641160800 + 60 * np.arange(6216 * 60, dtype=np.int64)
         (r,) = self._bg06(n_bars=6216, bar_minutes=60, timestamps=ts)
         assert not r.passed and r.severity == "ERROR"
-        assert r.message.startswith("n_bars (6216) and timestamps (372960) count different bars?")
+        assert r.message.startswith("n_bars and timestamps count different bars?")
+        assert "6216/372960" in r.message
 
     def test_span_runs_to_the_last_bars_close(self):
         from backtest_engine.bug_guard import check_data_period
@@ -563,13 +564,17 @@ class TestDataPeriodFromTimestamps:
         ts = 1609459200 + 3600 * np.arange(3000, dtype=np.int64)  # ~4 months
         (r,) = self._bg06(n_bars=2000, bar_minutes=60, timestamps=ts)
         assert not r.passed and r.severity == "ERROR" and "2000/3000" in r.message
+        assert r.message.startswith("SHORT PERIOD")  # share 0.67: no timeframe hint
+        ts30 = 1609459200 + 1800 * np.arange(2 * 4000, dtype=np.int64)  # 30m times, 1h n_bars
+        (r,) = self._bg06(n_bars=4000, bar_minutes=60, timestamps=ts30)
+        assert r.message.startswith("n_bars and timestamps count different bars?")
 
     def test_more_bars_than_timestamps_uses_timestamps(self):
         """hires: n_bars counted on 1m bars, ts of the 1h signal bars."""
         ts = 1609459200 + 3600 * np.arange(6 * 520, dtype=np.int64)  # ~4.3 months
         (r,) = self._bg06(n_bars=60 * len(ts), bar_minutes=60, timestamps=ts)
         assert not r.passed and "first and last bar times" in r.message
-        assert "fewer than" not in r.message
+        assert "n_bars/timestamps" not in r.message
         ts = 1609459200 + 3600 * np.arange(15 * 730, dtype=np.int64)  # ~15 months
         (r,) = self._bg06(n_bars=60 * len(ts), bar_minutes=60, timestamps=ts)
         assert r.passed
