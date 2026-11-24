@@ -1101,8 +1101,6 @@ def simulate_trades(
             exit_signals,
             open_arr, use_open_entry,
         )
-    else:
-        raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', 'sar_trailing', or 'custom'.")
 
     # --- Pack into structured array ---
     pnl_r, hold_bars, exit_type_arr, mfe_r, mae_r, entry_bar, exit_bar_arr = result_tuple

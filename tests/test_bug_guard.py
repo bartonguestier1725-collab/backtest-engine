@@ -3,6 +3,7 @@
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from backtest_engine.bug_guard import (
@@ -510,12 +511,20 @@ class TestDataPeriodFromTimestamps:
         ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)  # 10 years
         (r,) = self._bg06(n_bars=1500, bar_minutes=60, timestamps=ts)
         assert not r.passed and r.severity == "ERROR"
-        assert "SHORT PERIOD" in r.message and "n_bars=1500 is fewer" in r.message
+        assert "SHORT PERIOD: 2.1 months" in r.message and "1500/87600" in r.message
 
-    def test_fewer_bars_but_both_long_enough_warns(self):
-        ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)
-        (r,) = self._bg06(n_bars=8 * 8760, bar_minutes=60, timestamps=ts)
-        assert not r.passed and r.severity == "WARN"
+    def test_off_by_one_is_a_warn_in_any_market(self):
+        """Scaling, not the FX estimate: 3 years of stock hours (7 bars a
+        weekday) with one bar dropped from close must not fail."""
+        days = pd.bdate_range("2021-01-04", "2023-12-29")
+        ts = np.array([int(d.timestamp()) + 3600 * (14 + h) for d in days for h in range(7)])
+        (r,) = self._bg06(n_bars=len(ts) - 1, bar_minutes=60, timestamps=ts)
+        assert not r.passed and r.severity == "WARN" and "35.8 months" in r.message
+
+    def test_short_calendar_and_fewer_bars_is_error(self):
+        ts = 1609459200 + 3600 * np.arange(3000, dtype=np.int64)  # ~4 months
+        (r,) = self._bg06(n_bars=2000, bar_minutes=60, timestamps=ts)
+        assert not r.passed and r.severity == "ERROR" and "2000/3000" in r.message
 
     def test_more_bars_than_timestamps_uses_timestamps(self):
         """hires: n_bars counted on 1m bars, ts of the 1h signal bars."""

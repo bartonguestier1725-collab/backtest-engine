@@ -277,24 +277,8 @@ def check_resolution(
     return CheckResult("BG-05", True, f"Using {resolution_minutes}min bars for execution")
 
 
-def check_data_period(
-    n_bars: int,
-    bar_minutes: int = 60,
-    min_months: int = 12,
-    start_ts=None,
-    end_ts=None,
-) -> CheckResult:
-    """BG-06: Verify sufficient data period to avoid short-period overfitting.
-
-    If start_ts/end_ts are provided (Unix seconds like the rest of the
-    library, pd.Timestamp, datetime64 or datetime), uses calendar period.
-    Otherwise estimates from bar count assuming FX market hours (24h/day,
-    22 trading days/month = 528 bars/month for 1h). FX trades about 21.7
-    days a month, so the estimate errs short (5 years of AggVault EURUSD 1h
-    reads as 59 months). Markets with fewer hours read much shorter, and a
-    market open every day (crypto, 30.4 days a month) reads about 1.4× too
-    long, so pass the dates for those.
-    """
+def _period_months(n_bars: int, bar_minutes: int, start_ts=None, end_ts=None) -> tuple[float, str]:
+    """Months of data and how they were measured (see check_data_period)."""
     if start_ts is not None and end_ts is not None:
         import pandas as pd
 
@@ -315,15 +299,16 @@ def check_data_period(
                 raise ValueError("check_data_period: start_ts/end_ts is NaT")
             return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
-        delta = _ts(end_ts) - _ts(start_ts)
-        total_months = delta.days / 30.44
-        basis = "from the first and last bar times"
-    else:
-        # FX: 22 trading days/month × 24 hours/day = 528 1h-bars/month
-        bars_per_month = (22 * 24 * 60) / bar_minutes
-        total_months = n_bars / bars_per_month if bars_per_month > 0 else 0
-        basis = f"estimated from {n_bars} bars × {bar_minutes}min at FX hours"
+        # From the first bar's open to the last bar's close.
+        delta = _ts(end_ts) - _ts(start_ts) + pd.Timedelta(minutes=bar_minutes)
+        return delta.total_seconds() / 86400 / 30.44, "from the first and last bar times"
+    # FX: 22 trading days/month × 24 hours/day = 528 1h-bars/month
+    bars_per_month = (22 * 24 * 60) / bar_minutes
+    months = n_bars / bars_per_month if bars_per_month > 0 else 0
+    return months, f"estimated from {n_bars} bars × {bar_minutes}min at FX hours"
 
+
+def _period_result(total_months: float, basis: str, min_months: int) -> CheckResult:
     if total_months < min_months:
         return CheckResult(
             "BG-06", False,
@@ -332,6 +317,28 @@ def check_data_period(
         )
     return CheckResult("BG-06", True,
                        f"Data period: {total_months:.1f} months (>={min_months}, {basis})")
+
+
+def check_data_period(
+    n_bars: int,
+    bar_minutes: int = 60,
+    min_months: int = 12,
+    start_ts=None,
+    end_ts=None,
+) -> CheckResult:
+    """BG-06: Verify sufficient data period to avoid short-period overfitting.
+
+    If start_ts/end_ts are provided (the first and last bar open times: Unix
+    seconds like the rest of the library, pd.Timestamp, datetime64 or
+    datetime), uses the calendar period up to the last bar's close.
+    Otherwise estimates from bar count assuming FX market hours (24h/day,
+    22 trading days/month = 528 bars/month for 1h). FX trades about 21.7
+    days a month, so the estimate errs short (5 years of AggVault EURUSD 1h
+    reads as 59 months). Markets with fewer hours read much shorter, and a
+    market open every day (crypto, 30.4 days a month) reads about 1.4× too
+    long, so pass the dates for those.
+    """
+    return _period_result(*_period_months(n_bars, bar_minutes, start_ts, end_ts), min_months)
 
 
 def check_expanding_quantile(source_path: str | Path) -> CheckResult:
@@ -680,7 +687,8 @@ def run_all_checks(
                      If None, cost check is skipped.
     resolution_minutes : Bar size used for SL/TP simulation.
     n_bars : Number of bars in the dataset (BG-06 estimates the period from
-             it when ``timestamps`` is not given).
+             it when ``timestamps`` is not given; with fewer ``n_bars`` than
+             timestamps, the timestamp span is scaled by n_bars/len(timestamps)).
     bar_minutes : Size of each bar in minutes.
     n_trades : Total number of trades.
     min_months : Minimum data period in months.
@@ -693,7 +701,7 @@ def run_all_checks(
     avg_price : Representative price level for BG-14 no-SL detection
                 (e.g. median of close). 0 = skip check.
     timestamps : Bar open times of the data, Unix seconds (for BG-10, and
-                 BG-06 uses the first and last as the calendar period).
+                 BG-06 measures the period from the first to the last bar).
                  None = skip BG-10.
     strict : If True, assert_passed() is called (raises on ERROR).
     """
@@ -735,26 +743,22 @@ def run_all_checks(
     if ts_span:
         # The bar times give the calendar period; the bar count only estimates it.
         t = np.asarray(timestamps)
-        bad = False
         try:
-            r = check_data_period(n_bars or len(t), bar_minutes, min_months,
-                                  start_ts=t.min(), end_ts=t.max())
+            months, basis = _period_months(n_bars or len(t), bar_minutes, t.min(), t.max())
         except (ValueError, TypeError) as e:  # ms/ns, NaN/NaT, naive mixed with aware
             r = CheckResult("BG-06", False, f"BAD TIMESTAMPS: {e}")
-            bad = True
-        if not bad and n_bars and n_bars < len(t):
-            # Fewer bars than bar times, e.g. close sliced to a short window
-            # but the full ts passed: the estimate from n_bars must pass too.
-            est = check_data_period(n_bars, bar_minutes, min_months)
-            note = (f" n_bars={n_bars} is fewer than the {len(t)} timestamps, so BG-06 "
-                    f"also checked the period estimated from n_bars; n_bars and "
-                    f"timestamps should count the same signal-timeframe bars.")
-            if r.passed and est.passed:
-                r = CheckResult("BG-06", False, r.message + note, severity="WARN")
-            elif r.passed:
-                r = CheckResult("BG-06", False, est.message + note)
-            else:
-                r = CheckResult("BG-06", False, r.message + note)
+        else:
+            fewer = bool(n_bars) and n_bars < len(t)
+            if fewer:
+                # Fewer bars than bar times, e.g. close sliced to a short
+                # window but the full ts passed: count only the bars' share.
+                months *= n_bars / len(t)
+                basis += f", × n_bars/timestamps = {n_bars}/{len(t)}"
+            r = _period_result(months, basis, min_months)
+            if fewer:
+                r = CheckResult("BG-06", False, r.message + " — n_bars and timestamps "
+                                "should count the same signal-timeframe bars.",
+                                severity="WARN" if r.passed else "ERROR")
         report.results.append(r)
     elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))

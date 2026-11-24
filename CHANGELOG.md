@@ -23,11 +23,11 @@ change. Some metrics and checks do (first section).
   and the exit shares, and says how many it left out.
 - **BG-06 uses the bar times.** `bug_guard(timestamps=)` and
   `gk.gate0_validate(timestamps=)` ignored them for the data period and
-  estimated it from the bar count. They now measure the first to the last bar
-  time; timestamps in milliseconds or nanoseconds are a BG-06 ERROR (and
+  estimated it from the bar count. They now measure from the first bar's open
+  to the last bar's close; timestamps in milliseconds or nanoseconds are a BG-06 ERROR (and
   BG-10 reports times that are not numbers instead of raising). With
   fewer `n_bars` than timestamps (a sliced `close` with the full `ts`), the
-  estimate from `n_bars` must pass too, and a pass is a WARN. Without
+  span is scaled down by `n_bars`/timestamps and a pass is a WARN. Without
   timestamps the estimate is 24 h × 22 days a month (528 1h bars), not
   17 h × 22 days (374): FX trades about 21.7 days of 24 h, so the old
   estimate read 8.7 months of AggVault EURUSD 1h as 12.1 months and passed
