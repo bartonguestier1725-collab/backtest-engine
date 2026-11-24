@@ -59,7 +59,7 @@ Robustness (`robustness.json`): on real EURUSD 1h data (2024) instead of a rando
 
 ## Files
 
-- `cases/sNN.py` — strategies (`signals(data)` and `backtest(data)`); `cases/hires_lib.py` is the helper imported by s24.
+- `cases/sNN.py` — strategies (`signals(data)` and/or `backtest(data)`); `cases/hires_lib.py` is the helper imported by s24.
 - `labels.json` — answers: leak or not, the kind of leak, and where it sits (signal, execution, library).
 - `results.json`, `robustness.json`, `false_alarms.json`, `weak_leaks.json` — verdicts from the runs above.
 - `llm/prompt.txt`, `llm/*.sonnet.json`, `llm/summary.json` — the LLM prompt, raw answers and scores.

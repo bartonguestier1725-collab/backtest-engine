@@ -278,7 +278,7 @@ class TestFetchAggvaultErrors:
         with patch("urllib.request.urlopen", side_effect=[err, _mock_response(bars)]), \
                 patch("backtest_engine.data._sleep"):
             fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
-        assert err.fp is None or err.fp.closed
+        assert err.fp.closed
 
     def test_500_raises_with_code(self):
         with patch("urllib.request.urlopen", side_effect=_mock_http_error(500, "Internal Server Error")):

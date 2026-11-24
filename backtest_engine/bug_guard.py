@@ -286,13 +286,21 @@ def check_data_period(
 ) -> CheckResult:
     """BG-06: Verify sufficient data period to avoid short-period overfitting.
 
-    If start_ts/end_ts are provided (pd.Timestamp or datetime), uses calendar
-    period. Otherwise estimates from bar count assuming FX market hours
-    (~17h/day, ~22 days/month ≈ 374 bars/month for 1h).
+    If start_ts/end_ts are provided (Unix seconds like the rest of the
+    library, pd.Timestamp or datetime), uses calendar period. Otherwise
+    estimates from bar count assuming FX market hours (~17h/day, ~22
+    days/month ≈ 374 bars/month for 1h).
     """
     if start_ts is not None and end_ts is not None:
         import pandas as pd
-        delta = pd.Timestamp(end_ts) - pd.Timestamp(start_ts)
+
+        def _ts(x):
+            # Numbers are Unix seconds; pd.Timestamp(int) would read nanoseconds.
+            if isinstance(x, (int, float, np.integer, np.floating)):
+                return pd.Timestamp(float(x), unit="s")
+            return pd.Timestamp(x)
+
+        delta = _ts(end_ts) - _ts(start_ts)
         total_months = delta.days / 30.44
     else:
         # FX: ~22 trading days/month × ~17 hours/day = ~374 1h-bars/month

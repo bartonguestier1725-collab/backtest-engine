@@ -47,8 +47,8 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0,
     has few or no trades: those windows score their real total R (0 for
     none). A placeholder such as -999 would be averaged into the WFA OOS
     mean, and CSCV would rank parameter sets by how often they trade instead
-    of by how well (on this data it turned PBO 96% into 2%). min_trades is
-    for picking the best set on the full data only: below it, -inf.
+    of by how well. min_trades is for picking the best set on the full data
+    only: below it, -inf.
     """
     if end_idx == 0:
         end_idx = n_bars
@@ -253,10 +253,8 @@ print("=" * 70)
 print(f"\n  Walk-Forward: {len(param_grid_filtered)} params, 5 splits...")
 wf = WalkForward(n_bars=n_bars, is_ratio=0.7, n_splits=5, anchored=False)
 wfa_result = wf.run(param_grid_filtered, evaluate_fn)
-ratio = wfa_result['is_oos_ratio']
 print(f"  OOS mean PnL:      {wfa_result['oos_mean']:.3f}R per OOS window (total R)")
 print(f"  OOS positive frac: {wfa_result['oos_positive_frac']:.1%}")
-print(f"  OOS/IS ratio:      {ratio:.2f}")
 
 # CSCV
 print(f"\n  CSCV: {len(param_grid_filtered)} params, 10 splits...")

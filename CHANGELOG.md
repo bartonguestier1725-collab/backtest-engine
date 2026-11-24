@@ -14,7 +14,9 @@ Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
   printed "Filters reduced overfitting!". A window now scores its real total
   R (0 without trades), and the verdict uses the Gate 3 rule (WFA and CSCV
   must both pass). The filtered strategy fails it. `level3_gatekeeper.py`
-  had the same placeholder (PBO 87.7% → 88.1%).
+  had the same placeholder (PBO 87.7% → 88.1%), and judged the OOS/IS
+  ratio of window totals, which is about 0.43 even with a perfect transfer
+  (the OOS windows are 30/70 as long); it now compares R per bar.
 - `level2`/`level3`/`level4`: the Level 1–3 numbers printed from constants
   were from v0.5.x (PF 1.05 / 1.33, PBO 80%); level2 now reads the Level 1
   row from its own grid. The WFA mean is labelled per OOS window (it is total
@@ -33,6 +35,10 @@ Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
 - BG-05 no longer quotes "SL=2.0×ATR≈20pip" built from default arguments; it
   quotes the SL only when `check_resolution` is given `sl_atr_mult` and
   `avg_atr_pips`.
+- `check_data_period(start_ts=, end_ts=)` reads numbers as Unix seconds. It
+  read them as nanoseconds and reported 0.0 months.
+- Gate 3's message says "WFA OOS positive splits" (the share of WFA splits
+  with a positive OOS metric), not "win rate".
 
 ### Docs
 

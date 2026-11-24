@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) that use this repository to backtest a trading idea for a user. `CLAUDE.md` has the same rules in Japanese plus Claude-specific notes; the strategy file template below is only here.
+Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) that use this repository to backtest a trading idea for a user. `CLAUDE.md` has the same rules in Japanese plus Claude-specific notes; the strategy file template below is not in `CLAUDE.md`.
 
 ## Before you report any backtest result
 
@@ -41,9 +41,9 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
 
 ## Other rules
 
-- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m takes 2–3 minutes: the server allows 10 requests a minute).
+- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m takes 2–3 minutes, mostly download time).
 - Pass `open_prices` to `simulate_trades` (next-bar-open entry). Without it, entry is at the signal bar's close (optimistic).
-- Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)` (`ts`: the signal bars' times). Gate 0 checks trade count, entry on the previous trade's exit bar, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for. Gate 0 raises on an error; Gates 1–4 only return a result, so check `.passed` (see `examples/gatekeeper_pipeline.py`).
+- Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)` (`ts`: the times of every bar of the timeframe the signals were made on, not `ts[signal_bars]`; the 1h times also for `simulate_trades_hires`). Gate 0 checks trade count, entry on the previous trade's exit bar, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for. Gate 0 raises on an error; Gates 1–4 only return a result, so check `.passed` (see `examples/gatekeeper_pipeline.py`).
 - State whether results are GROSS (no costs) or NET (`entry_costs` from `BrokerCost`).
 - Interpret PF: < 1.0 losing; 1.0–1.1 weak, likely gone after costs; 1.1–1.5 a possible edge, validate with GateKeeper; above 1.5 suspect look-ahead or overfitting first.
 - Timestamps are bar open times in UTC (Unix seconds).

@@ -10,7 +10,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 
 1. **HTMLレポート生成**: 「HTMLレポートも生成しますか？PnL分布・月次損益・Exit内訳・年別損益が自動で入ります」
 2. **先読みの検査（audit）**: 結果を報告する前に、戦略を `signals(data)` と `backtest(data)` の2関数のファイルにして `uv run python -m backtest_engine.audit 戦略.py --json` を回す（詳しくは下の「戦略の検証」）。fail なら PF や勝率を結果として報告しない
-3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)`。ts はシグナルを作った足の時刻。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・前の取引の決済足でのエントリー・SLなし・始値エントリー・固定コストの検査が回る。GROSS では spreads_used を渡さないので GK-00 が警告を出すが、GROSS ならそれでよい。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）。Gate 0 は ERROR で止まるが、Gate 1〜4 は不合格でも止まらない（戻り値の `.passed` を見る）。Gate 1〜4 の回し方は `examples/gatekeeper_pipeline.py`
+3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)`。ts はシグナルを作った時間足の全部の足の時刻（`ts[signal_bars]` ではない。hires でも1時間足の ts）。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・前の取引の決済足でのエントリー・SLなし・始値エントリー・固定コストの検査が回る。GK-00 の中の spreads_used の項目は GROSS なら気にしなくてよい（他の項目は埋める）。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）。Gate 1〜4 は不合格でも止まらないので `.passed` を見る（回し方は `examples/gatekeeper_pipeline.py`）
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
@@ -35,7 +35,7 @@ AggVault データでのバックテストはデフォルトで GROSS。「こ�
 ユーザーが初めてバックテストを依頼してきたら:
 - AggVault APIキーの設定方法を案内（`export AGGVAULT_KEY=tk_your_key`）
 - 対応データ: 29銘柄（FX 28ペア + XAUUSD）、6タイムフレーム（1m/5m/15m/1h/4h/1d）、10年分
-- 1分足の長い期間は、fetch_aggvault が180日ずつに分けて自動で取る（1回の上限が50万本のため）。5年分で2〜3分かかる（2026-11-24 に測って146秒。制限は10回/分で、同じキーで同時に取ると429の待ちが入る）。v0.5.xは1回で取っていて、1分足は最初の50万本（約1.3年分）で切れていた
+- 1分足の長い期間は、fetch_aggvault が180日ずつに分けて自動で取る（1回の上限が50万本のため）。5年分で2〜3分かかる（同じキーで同時に取ると429の待ちが入る）。v0.5.xは1回で取っていて、1分足は最初の50万本（約1.3年分）で切れていた
 - 最初の1回は結果と一緒に「データは6ブローカーの中央値で構成された集約データです」と説明
 
 ## Commands

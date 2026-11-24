@@ -206,7 +206,8 @@ def fetch_aggvault(
     -----
     The server returns at most 500,000 bars per request. Long 1m/5m/15m
     ranges are fetched in several requests (1m: 180-day windows, paced to the
-    10 requests/minute limit), so 5 years of 1m data takes about a minute.
+    10 requests/minute limit). 5 years of 1m data takes 2-3 minutes, mostly
+    download time (the pacing alone is about a minute).
     A window with no bars inside the range emits a DataQualityWarning.
 
     Returns

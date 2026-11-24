@@ -118,6 +118,15 @@ def run_full(params: dict) -> dict | None:
     return {"pnl_r": res["pnl_r"], "pf": res.profit_factor}
 
 
+def per_bar_ratio(wfa: dict) -> float:
+    """OOS/IS of R per bar. The IS and OOS windows differ in length (70/30),
+    so the raw 'is_oos_ratio' of window totals is about 0.43 even when the
+    edge carries over perfectly."""
+    is_len = np.mean([r["is_range"][1] - r["is_range"][0] for r in wfa["splits"]])
+    oos_len = np.mean([r["oos_range"][1] - r["oos_range"][0] for r in wfa["splits"]])
+    is_per_bar = wfa["is_mean"] / is_len
+    return (wfa["oos_mean"] / oos_len) / is_per_bar if is_per_bar else 0.0
+
 # ── Step 2: BugGuard (教育目的で実行、ブロックはしない) ───────────────
 print("\n" + "=" * 70)
 print("Step 2: BugGuard — Implementation Checks")
@@ -161,10 +170,9 @@ wfa_result = wf.run(param_grid, evaluate_fn)
 
 print(f"  OOS mean PnL:     {wfa_result['oos_mean']:.3f}R per OOS window (total R)")
 print(f"  OOS positive frac: {wfa_result['oos_positive_frac']:.1%} of splits profitable")
-print(f"  OOS/IS ratio:      {wfa_result['is_oos_ratio']:.2f}")
+ratio = per_bar_ratio(wfa_result)  # 1.0 = the IS edge per bar carries over
+print(f"  OOS/IS ratio:      {ratio:.2f} (R per bar)")
 
-# Interpret the ratio (key 'is_oos_ratio' = OOS_mean / IS_mean; 1.0 = perfect transfer)
-ratio = wfa_result['is_oos_ratio']
 if ratio < 0.3:
     print(f"  ✗ OOS/IS ratio {ratio:.2f} — OOS is {ratio:.0%} of IS. Severe overfitting.")
 elif ratio < 0.7:
@@ -242,9 +250,8 @@ print(f"""
   Level 1: RSI(14) 30/70 → PF≈1.10 GROSS (1m fills), carried by 2023 alone
   Level 2: Optimized to RSI(21) 20/70 → PF={best_pf:.2f} in-sample (looks good!)
   Level 3: WFA + CSCV reveal the truth:
-    - OOS mean: {wfa_result['oos_mean']:.1f}R per window vs IS {wfa_result['is_mean']:.1f}R
     - PBO: {pbo:.0%} — {'HIGH overfitting probability' if pbo > 0.40 else 'moderate risk' if pbo > 0.20 else 'low risk'}
-    - OOS/IS ratio: {ratio:.2f} — {'severe overfitting' if ratio < 0.3 else 'significant degradation' if ratio < 0.7 else 'transfers well'}
+    - OOS/IS ratio (R per bar): {ratio:.2f} — {'severe overfitting' if ratio < 0.3 else 'significant degradation' if ratio < 0.7 else 'transfers well'}
 
   Conclusion: RSI reversal alone does not produce a robust edge on EURUSD.
   The Level 2 "improvement" was mostly fitting to 2023's range market.

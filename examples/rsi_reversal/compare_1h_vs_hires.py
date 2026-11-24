@@ -6,7 +6,7 @@ max hold 48h. Runs each simulation GROSS and NET (Tradeview ILC costs).
   export AGGVAULT_KEY=tk_your_key
   uv run python examples/rsi_reversal/compare_1h_vs_hires.py
 
-Fetches 1 year of 1m bars in 3 requests (~15 s).
+Fetches 1 year of 1m bars in 3 requests (~30-40 s).
 """
 
 import numpy as np

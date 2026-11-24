@@ -6,7 +6,7 @@ Gate 0: Data validation (1 min)    — Do we have enough data? Correct costs?
 Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. Best PF < 1.05 → dead.
 Gate 2: Coarse screen (20 min)     — Run ~100 combos. No combo with PF >= 1.10 AND RF >= 1.5 → dead.
 Gate 3: WFA + CSCV (30 min)        — PBO > 0.40 or WFA OOS positive splits < 0.55 → dead.
-Gate 4: Monte Carlo (5 min)        — MC pass rate < 0.70 → dead.
+Gate 4: Monte Carlo (5 min)        — MC pass rate < 0.70 or DD@confidence > dd_limit → dead.
 
 Default thresholds are tuned for FX. Override them via class variables
 (e.g. ``gk.GATE1_MIN_PF = 1.10``) for other asset classes.
@@ -434,7 +434,7 @@ class GateKeeper:
                       Must contain 'pbo' if provided.
 
         Checks:
-          - WFA OOS win rate >= GATE3_MIN_WFA_WINRATE
+          - share of WFA splits with OOS metric > 0 >= GATE3_MIN_WFA_WINRATE
           - CSCV PBO <= GATE3_MAX_PBO (if provided)
         """
         self._header("Gate 3", "WFA + CSCV Overfitting Check")
@@ -444,7 +444,7 @@ class GateKeeper:
         oos_frac = wfa_result.get("oos_positive_frac", 0.0)
         wfa_ok = oos_frac >= self.GATE3_MIN_WFA_WINRATE
         checks.append(
-            f"WFA OOS win rate={oos_frac:.2f} "
+            f"WFA OOS positive splits={oos_frac:.2f} "
             f"({'OK' if wfa_ok else 'FAIL'}, min={self.GATE3_MIN_WFA_WINRATE})"
         )
 

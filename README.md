@@ -86,7 +86,7 @@ rsi_vals = rsi(c_1h, 14)
 atr_vals = atr(h_1h, l_1h, c_1h, 14)
 # ... generate signal_bars, directions, sl_distances, tp_distances
 
-# Execution on 1m (one year = 3 requests, ~15 s)
+# Execution on 1m (one year = 3 requests, ~30-40 s)
 ts_1m, o_1m, h_1m, l_1m, c_1m, _ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2025-01-01")
 
 results = simulate_trades_hires(
@@ -208,7 +208,7 @@ expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJ
 
 Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`. BG-05 always runs (it assumes 60-minute fills unless you pass `resolution_minutes`).
 
-The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06: bar count at 22 days × 17 h a month). `bug_guard()` and `GateKeeper` always use it; for calendar dates call `check_data_period(n_bars, bar_minutes, start_ts=..., end_ts=...)` directly.
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06: bar count at 22 days × 17 h a month). `bug_guard()` and `GateKeeper` always use it; for calendar dates call `check_data_period(n_bars, bar_minutes, start_ts=ts[0], end_ts=ts[-1])` directly (Unix seconds or timestamps).
 
 ```python
 from backtest_engine import bug_guard, BrokerCost, EXIT_NO_FILL
@@ -279,7 +279,7 @@ uv run python -m backtest_engine.audit my_strategy.py          # or --json; --cs
 | `null_edge` | Runs `backtest` on 120 driftless random walks and tests the mean R per trade before costs (paths as clusters). Each bar's high/low come from a continuous (Brownian bridge) path, so stops and targets fill at their level fairly. The same backtest is also run with every trade's direction replaced by a coin flip inside `simulate_trades` (same entries, SL/TP distances and exit rules) as a placebo | Entries placed before their signal, exits or targets that use later bars, timing bugs inside libraries; and a backtest made pessimistic by the SL-first rule (`warn`) |
 | `source:BG-04/07/09` | BugGuard source patterns | Some backward-fill and full-period quantile patterns, entry at close (pattern matching only) |
 
-Exit code 1 on `fail`, 2 on `error`. In Python: `from backtest_engine.audit import audit_strategy, check_lookahead, check_null_edge`; `audit_strategy` runs each audit in a fresh Python process, so strategies and their helpers never see another audit's modules. The audit runs the strategy's code with your permissions; it is not a sandbox. `null_edge` flags |t| > 3.5. On the benchmark it flagged 3 of 360 runs of clean strategies (12 strategies × 30 seeds), all at one seed; it caught a leak affecting 20% of trades in 18 of 20 runs. Different `--seed` values share no random path, so a clean strategy almost never fails twice; a weak leak can pass a single run.
+Exit code 1 on `fail`, 2 on `error`, 0 on `pass` and `warn` (read `overall`). In Python: `from backtest_engine.audit import audit_strategy, check_lookahead, check_null_edge`; `audit_strategy` runs each audit in a fresh Python process, so strategies and their helpers never see another audit's modules. The audit runs the strategy's code with your permissions; it is not a sandbox. `null_edge` flags |t| > 3.5. On the benchmark it flagged 3 of 360 runs of clean strategies (12 strategies × 30 seeds), all at one seed; it caught a leak affecting 20% of trades in 18 of 20 runs. Different `--seed` values share no random path, so a clean strategy almost never fails twice; a weak leak can pass a single run.
 
 On the [benchmark](bench/README.md) (16 strategies with a leak: 15 planted and 1 found in a strategy written as a clean control; 12 without), the two checks together caught all 16 with no false alarm. An LLM reading each strategy file caught 15, with 1 false alarm. It missed the one leak inside an imported helper whose source it was not shown (the pre-v0.6.0 `simulate_trades_hires`, described in the prompt as documented); `null_edge` found it without reading code, and the LLM found it once given the helper's source. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
 
@@ -450,13 +450,15 @@ from backtest_engine import WalkForward, CSCV
 wf = WalkForward(n_bars=len(close), is_ratio=0.7, n_splits=5, anchored=False)
 wf_result = wf.run(param_grid, evaluate_fn)
 print(f"OOS mean: {wf_result['oos_mean']:.3f}R")
-print(f"IS/OOS ratio: {wf_result['is_oos_ratio']:.2f}")
+print(f"OOS/IS ratio: {wf_result['is_oos_ratio']:.2f}")  # of window totals: OOS windows are shorter
 
 # CSCV — Probability of Backtest Overfitting (Bailey 2015)
 cscv = CSCV(n_splits=10)
 cscv_result = cscv.run(param_grid, evaluate_fn, n_bars=len(close))
 print(f"PBO: {cscv_result['pbo']:.1%}")  # < 0.5 = probably not overfit
 ```
+
+`evaluate_fn(params, start_bar, end_bar)` must return the window's real metric, 0 for a window without trades. A placeholder such as -999 for "too few trades" is averaged into the WFA OOS mean and summed by CSCV, so PBO then ranks parameter sets by how often they trade (in `examples/rsi_reversal/level4_filters.py` it turned PBO 96% into 2%).
 
 ## Data loading
 
@@ -477,7 +479,7 @@ timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
 
 `fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
 
-The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes 2–3 minutes (146 s measured on 2026-11-24; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
+The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes 2–3 minutes, mostly download time (the pacing alone is about a minute; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
 
 All timestamps are bar open times in Unix seconds (UTC).
 

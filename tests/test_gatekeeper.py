@@ -301,7 +301,7 @@ class TestGate3:
         gk = GateKeeper(strategy_name="test")
         result = gk.gate3_validate(wfa_result, cscv_result)
         assert result.passed
-        assert "WFA OOS win rate=0.80" in result.message
+        assert "WFA OOS positive splits=0.80" in result.message
         assert "CSCV PBO=0.10" in result.message
 
     def test_bad_wfa_killed(self, capsys):

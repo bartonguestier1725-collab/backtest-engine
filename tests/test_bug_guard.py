@@ -420,3 +420,32 @@ class TestNanQuantile:
         src = tmp_path / "s.py"
         src.write_text("thr = np.nanquantile(a, 0.7)\n")
         assert not check_expanding_quantile(src).passed
+
+
+class TestDataPeriodCalendar:
+    """check_data_period with start_ts/end_ts uses the calendar span."""
+
+    def test_unix_seconds(self):
+        from backtest_engine.bug_guard import check_data_period
+        # 2021-01-01 .. 2024-01-01 in Unix seconds (the library's time unit)
+        r = check_data_period(100, 60, start_ts=np.int64(1609459200), end_ts=np.int64(1704067200))
+        assert r.passed and "36.0 months" in r.message
+
+    def test_timestamp_objects(self):
+        import pandas as pd
+        from backtest_engine.bug_guard import check_data_period
+        r = check_data_period(100, 60, start_ts=pd.Timestamp("2021-01-01"),
+                              end_ts=pd.Timestamp("2021-07-01"))
+        assert not r.passed and r.severity == "ERROR"
+
+
+class TestCoarseBarsMessage:
+    def test_no_made_up_sl(self):
+        from backtest_engine.bug_guard import check_resolution
+        r = check_resolution(60)
+        assert not r.passed and "pip" not in r.message
+
+    def test_quotes_sl_when_given(self):
+        from backtest_engine.bug_guard import check_resolution
+        r = check_resolution(60, 1.5, 12.0)
+        assert "SL=1.5×ATR≈18pip" in r.message
