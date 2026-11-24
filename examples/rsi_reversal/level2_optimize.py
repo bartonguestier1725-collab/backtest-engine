@@ -1,6 +1,7 @@
 """RSI Reversal Strategy — Level 2: Parameter Optimization.
 
-Level 1 showed RSI(14) 30/70 has almost no edge (PF=1.05).
+Level 1 showed RSI(14) 30/70 has a thin GROSS edge (PF≈1.10 on 1m fills),
+carried almost entirely by 2023.
 Can we find better parameters?
 
 Grid search over:
@@ -206,17 +207,21 @@ print("Parameter distribution in Top 10")
 print(f"{'='*90}")
 for key in keys:
     counts = top10[key].value_counts().sort_index()
-    print(f"  {key:>15}: {dict(counts)}")
+    print(f"  {key:>15}: { {k: int(v) for k, v in counts.items()} }")
 
 # ── Comparison: Level 1 vs Level 2 ───────────────────────────────────
 print(f"\n{'='*90}")
-print(f"Level 1 (RSI 14/30/70) vs Level 2 (optimized)")
+print(f"Level 1 params (RSI 14/30/70, SL 2xATR, RR 2, 48h) vs Level 2 (optimized)")
+print(f"Both with 1h fills here (Level 1 itself used 1m fills)")
 print(f"{'='*90}")
+lv1 = df_results[(df_results.rsi_period == 14) & (df_results.oversold == 30)
+                 & (df_results.overbought == 70) & (df_results.sl_atr_mult == 2.0)
+                 & (df_results.rr_ratio == 2.0) & (df_results.max_hold == 48)].iloc[0]
 print(f"  {'':>20} {'Level 1':>10} {'Level 2':>10}")
-print(f"  {'PF':>20} {'1.05':>10} {best_results.profit_factor:>10.2f}")
-print(f"  {'Expectancy':>20} {'0.028R':>10} {best_results.expectancy_r:>+10.3f}R")
-print(f"  {'Sharpe':>20} {'0.02':>10} {best_results.sharpe_r:>10.2f}")
-print(f"  {'Trades':>20} {'3550':>10} {len(pnl):>10}")
+print(f"  {'PF':>20} {lv1.pf:>10.2f} {best_results.profit_factor:>10.2f}")
+print(f"  {'Expectancy':>20} {lv1.expectancy_r:>+10.3f}R {best_results.expectancy_r:>+10.3f}R")
+print(f"  {'Sharpe':>20} {lv1.sharpe_r:>10.2f} {best_results.sharpe_r:>10.2f}")
+print(f"  {'Trades':>20} {int(lv1.n_trades):>10} {len(pnl):>10}")
 
 print(f"\n{'='*90}")
 print("Looks promising? → Level 3 will test if this is real or overfit.")

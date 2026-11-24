@@ -248,20 +248,24 @@ def check_bfill_in_source(source_path: str | Path) -> CheckResult:
 
 def check_resolution(
     resolution_minutes: int,
-    sl_atr_mult: float = 2.0,
-    avg_atr_pips: float = 10.0,
+    sl_atr_mult: float | None = None,
+    avg_atr_pips: float | None = None,
 ) -> CheckResult:
     """BG-05: Warn if using 1h+ bars for SL/TP simulation.
 
     1h bars cannot determine SL/TP hit order. 1m or finer is required
-    for accurate fill simulation.
+    for accurate fill simulation. Pass ``sl_atr_mult`` and ``avg_atr_pips``
+    to have the warning quote your SL size.
     """
     if resolution_minutes >= 60:
+        sl_note = ""
+        if sl_atr_mult is not None and avg_atr_pips is not None:
+            sl_note = f"With SL={sl_atr_mult}×ATR≈{avg_atr_pips*sl_atr_mult:.0f}pip, "
         return CheckResult(
             "BG-05", False,
             f"COARSE BARS: Using {resolution_minutes}min bars for SL/TP detection. "
-            f"With SL={sl_atr_mult}×ATR≈{avg_atr_pips*sl_atr_mult:.0f}pip, intra-bar "
-            f"SL/TP hit order is unknowable. Use ≤5min bars for accurate simulation.",
+            f"{sl_note}{'i' if sl_note else 'I'}ntra-bar SL/TP hit order is unknowable "
+            f"(a bar touching both counts as SL). Use ≤5min bars for accurate simulation.",
             severity="WARN",
         )
     if resolution_minutes >= 15:

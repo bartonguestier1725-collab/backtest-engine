@@ -10,7 +10,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 
 1. **HTMLレポート生成**: 「HTMLレポートも生成しますか？PnL分布・月次損益・Exit内訳・年別損益が自動で入ります」
 2. **先読みの検査（audit）**: 結果を報告する前に、戦略を `signals(data)` と `backtest(data)` の2関数のファイルにして `uv run python -m backtest_engine.audit 戦略.py --json` を回す（詳しくは下の「戦略の検証」）。fail なら PF や勝率を結果として報告しない
-3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))`。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・取引の重なり・SLなし・始値エントリー・固定コストの検査が回る。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）
+3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)`。ts はシグナルを作った足の時刻。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・前の取引の決済足でのエントリー・SLなし・始値エントリー・固定コストの検査が回る。GROSS では spreads_used を渡さないので GK-00 が警告を出すが、GROSS ならそれでよい。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）。Gate 0 は ERROR で止まるが、Gate 1〜4 は不合格でも止まらない（戻り値の `.passed` を見る）。Gate 1〜4 の回し方は `examples/gatekeeper_pipeline.py`
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
@@ -23,7 +23,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 - PF 1.10〜1.50 → 「エッジの兆候あり。GateKeeperで堅牢性を確認すべき」
 - PF 1.50〜2.0 → 「強い結果。先読みと過学習をまず疑い、audit と CSCV で確認」
 - PF > 2.0 → 「過学習か先読みを疑ってください。audit と CSCV で確認を推奨」
-- Max DD が Total R の50%超 → 「ドローダウンが大きい。実運用で精神的に耐えられるか要検討」
+- Total R がプラスで、Max DD がその50%超 → 「ドローダウンが大きい。実運用で精神的に耐えられるか要検討」
 
 ### GROSS / NET の明示
 
@@ -34,8 +34,8 @@ AggVault データでのバックテストはデフォルトで GROSS。「こ�
 
 ユーザーが初めてバックテストを依頼してきたら:
 - AggVault APIキーの設定方法を案内（`export AGGVAULT_KEY=tk_your_key`）
-- 対応データ: 29通貨ペア、6タイムフレーム（1m/5m/15m/1h/4h/1d）、10年分
-- 1分足の長い期間は180日ずつ分けて取得する（1回の上限が50万本のため。5年分で約1分かかる）。v0.5.xは1回で取っていて、1分足5年分は2022年8月で切れていた
+- 対応データ: 29銘柄（FX 28ペア + XAUUSD）、6タイムフレーム（1m/5m/15m/1h/4h/1d）、10年分
+- 1分足の長い期間は、fetch_aggvault が180日ずつに分けて自動で取る（1回の上限が50万本のため）。5年分で2〜3分かかる（2026-11-24 に測って146秒。制限は10回/分で、同じキーで同時に取ると429の待ちが入る）。v0.5.xは1回で取っていて、1分足は最初の50万本（約1.3年分）で切れていた
 - 最初の1回は結果と一緒に「データは6ブローカーの中央値で構成された集約データです」と説明
 
 ## Commands
@@ -53,7 +53,7 @@ uv run pytest -k "test_rsi"           # パターン指定
 ### データフロー
 
 ```
-fetch_aggvault() → 6-tuple numpy arrays (ts, o, h, l, c, vol)
+fetch_aggvault() → 6-tuple numpy arrays (ts, o, h, l, c, vol)  # AggVault の vol は常に0
   ↓
 indicators (sma, atr, rsi...) → signal_bars, directions, sl/tp distances
   ↓
@@ -71,12 +71,14 @@ generate_report() → HTML file
 
 ### HTMLレポート（generate_report）
 
-`trades=results, trade_timestamps=timestamps` を渡すだけで以下が自動生成:
-- 資産曲線 + DD%チャート
+`generate_report(ReportConfig(title=..., trades=results, trade_timestamps=timestamps), 出力パス)` で以下が自動で入る:
 - PnL分布ヒストグラム
 - エントリー月別/年別損益テーブル
 - Exit内訳（SL/TP/タイムアウト別の件数・平均PnL）
-- GateKeeper/WFA/CSCVセクション（データを渡した場合）
+
+trade_timestamps は results の entry_bar で引く足の時刻（hires なら1分足の時刻。1時間足の時刻を渡すと月別・年別の表が出ない）。自動では入らないもの:
+- 資産曲線 + DD%: `equity_curve=` を渡す。DD% はピークに対する比なので、累積 R ではなく残高（例: 1取引1%リスクの複利）を渡す
+- GateKeeper/WFA/CSCV の表: `gates=[GateRow(...)]`・`wfa=[WfaRow(...)]`・`cscv=CscvResult(...)` を自分で作って渡す（`WalkForward.run()` などの dict はそのまま渡せない）
 
 ## Domain Rules
 
@@ -108,14 +110,15 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 `backtest_engine.audit` は、コードを読まずに動きで先読みを調べる。AI がコードを読んで確かめるのとは別に回す（問題集では、AI に中身を見せなかったライブラリの中の先読みを、これが見つけた。`bench/README.md`）。
 
 - `lookahead`: ある足より後のデータだけを書き換えてシグナルを作り直し、それより前のシグナルが変わったら先読み。summary に、どの足が変わったかから推した原因が出る。確率的な検査で、まれにしかシグナルを変えない先読みは通ることがある
-- `null_edge`: エッジのない乱数の相場で backtest を回し、同じエントリーの向きを硬貨投げにした版とも比べる。勝つ・硬貨投げと違う → fail（先読みか時刻ずれ）。負けるが硬貨投げと同じ → warn（1本の足でSLとTPの両方に触れるときSLを優先する規則で悲観側に偏っている。hires で回し直す）
-- null_edge の fail は問題として扱い、summary の原因を探す（先読みのない戦略が fail になるのは1%未満、問題集では360回中3回）。`--seed 1` でもう一度回すと分かることが増える（種が違えば乱数の相場は1本も重ならない）。2回続けて fail なら確定。fail のあと pass なら多くは偶然だが、一部の取引だけの弱い漏れも1回は通ることがあるので、summary が指す箇所のコードを確かめてから報告する
+- `null_edge`: エッジのない乱数の相場で backtest を回し、同じエントリーの向きを硬貨投げにした版とも比べる。勝つ・硬貨投げと違う → fail（先読みか時刻ずれ）。負けるが硬貨投げと同じ → warn（1本の足でSLとTPの両方に触れるときSLを優先する規則で悲観側に偏っている。hires で回し直す）。負けて、硬貨投げの版は負けていない（または比べられない）→ fail（LOSS ON RANDOM DATA。エントリーの時刻ずれか、SL優先の偏り。hires と `--seed 1` で回し直す）
+- null_edge の fail は問題として扱い、summary の原因を探す（問題集では、先読みのない戦略が fail になったのは360回中3回で、3回とも同じ種）。`--seed 1` でもう一度回すと分かることが増える（種が違えば乱数の相場は1本も重ならない）。2回続けて fail なら確定。fail のあと pass なら多くは偶然だが、一部の取引だけの弱い漏れも1回は通ることがあるので、summary が指す箇所のコードを確かめてから報告する
 - 損益からコストを手で引いている場合、null_edge はそれも損失として数える（entry_costs で渡したコストだけを戻して検定する）
 - fail の結果は報告しない。原因を直して回し直す。error は検査ができていない（合格ではない）。pass でも「先読みが無いことの証明ではない」と添える
+- 終了コードは fail が1、error が2、pass と warn は0。判定は JSON の `overall` と各 `verdict` を読む
 - backtest の中ではエンジンの simulate_trades / simulate_trades_hires を使う（硬貨投げの版は、そこで向きだけを入れ替えて作る）
-- 英語の手順は `AGENTS.md`（Claude 以外の AI も読む）
+- 戦略ファイルの雛形（data の中身、signals の戻り値、1分足で回すときの `BAR_MINUTES`・`NULL_BARS`・`NULL_VOL`）と英語の手順は `AGENTS.md`（Claude 以外の AI も読む）。API の呼び方は README の Quick start と各節
 
 ### Numba 制約
 
-- `simulate_trades`, indicators は全て `@njit(cache=True)`
+- `simulate_trades` の中のカーネル（`_sim_*_inner`）と indicators は `@njit(cache=True)`
 - Numba 内で pandas, dict, list comprehension は使えない。numpy のみ

@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
+
+### Examples
+
+- **`rsi_reversal/level4_filters.py` reached the wrong conclusion** — its
+  `evaluate_fn` returned -999 for a window with fewer than 10 trades. WFA
+  averaged that into the OOS mean (-209.7R instead of -9.6R per window), and
+  CSCV summed it per window, so the ranking followed how often a parameter
+  set traded, not how well: PBO came out 2% instead of 96%, and the script
+  printed "Filters reduced overfitting!". A window now scores its real total
+  R (0 without trades), and the verdict uses the Gate 3 rule (WFA and CSCV
+  must both pass). The filtered strategy fails it. `level3_gatekeeper.py`
+  had the same placeholder (PBO 87.7% → 88.1%).
+- `level2`/`level3`/`level4`: the Level 1–3 numbers printed from constants
+  were from v0.5.x (PF 1.05 / 1.33, PBO 80%); level2 now reads the Level 1
+  row from its own grid. The WFA mean is labelled per OOS window (it is total
+  R, not R per trade), and the CSCV question describes PBO correctly.
+- `gold_rollover/with_strategy_builder.py` stopped with `NameError: df` since
+  the move to `fetch_aggvault`; it notes that BrokerCost's XAUUSD pip
+  ($0.01) makes its pips 10× those of the `stage1_*` scripts ($0.10).
+
+### Fixes
+
+- `uv sync` now installs pytest (a `dev` dependency group), so `uv run
+  pytest` works in a fresh clone. The `dev` extra stays for `pip install -e
+  '.[dev]'`.
+- `fetch_aggvault` closes the HTTP 429/503 reply before retrying (it left a
+  `ResourceWarning`).
+- BG-05 no longer quotes "SL=2.0×ATR≈20pip" built from default arguments; it
+  quotes the SL only when `check_resolution` is given `sl_atr_mult` and
+  `avg_atr_pips`.
+
+### Docs
+
+- README, CLAUDE.md, AGENTS.md: BG-06 is an ERROR, not a warning, and
+  `bug_guard()`/GateKeeper cannot take `start_ts`/`end_ts`; BugGuard has no
+  default cost registry; `generate_report` builds the equity curve and the
+  Gate/WFA/CSCV tables only from values you pass (`WfaRow`, `CscvResult`),
+  and DD% needs a balance curve, not cumulative R; `custom` exits ignore TP
+  and `be_trigger_pct`/`retrace_pct` apply to `exit_mode="rr"` only;
+  metrics count `NO_FILL` rows; Gate 3 uses the share of WFA splits with a
+  positive OOS metric, not a trade win rate; Gates 1–4 do not stop on a
+  failure; BG-08 reports only entries on the previous exit bar; the audit's
+  third `null_edge` failure (LOSS ON RANDOM DATA) and its exit code 0 for
+  `warn`; 5 years of 1m data take 2–3 minutes (146 s measured), not one.
+- `gatekeeper.py` docstring stated the kill conditions backwards.
+
 ## v0.6.0
 
 This release fixes several bugs that made results look different from what the
@@ -48,7 +97,7 @@ with v0.5.x before relying on them.
 - **`load_ohlcv` / `resample_ohlcv` returned wrong timestamps on pandas 3**
   (GitHub issue #1) — `astype(int64) // 10**9` assumed nanosecond datetimes.
   On pandas 3.0.1, `load_ohlcv` returned 1704067 instead of 1704067200 and
-  `resample_ohlcv` returned 1, 2, … Both now convert any datetime resolution,
+  `resample_ohlcv` returned 1 for every bar of 2001–2033. Both now convert any datetime resolution,
   and `load_ohlcv` also accepts numeric epoch seconds or milliseconds and
   date strings with UTC offsets.
 - **Gate 2 passed when PF and RF came from different combos** — the best PF
@@ -87,7 +136,8 @@ with v0.5.x before relying on them.
   the metadata is lost (e.g. after `np.concatenate`). BG-08 is a WARN here:
   trades are simulated independently, so overlapping trades are not a
   same-bar re-entry bug. BG-01 is not run in Gate 0, since `simulate_trades`
-  sets the entry bar itself and it cannot fail. GK-00 lists every missing
+  sets the entry bar itself and it cannot fail; BG-13 is not run either (no
+  input for it). GK-00 lists every missing
   input.
 - **`resolution_minutes` defaulted to 1** — a GateKeeper created without it
   passed BG-05 even for 1h fills. The default is now `None`, which means
@@ -114,8 +164,9 @@ with v0.5.x before relying on them.
   before costs with paths as clusters, and compares with the same entries
   under coin-flip directions (flipped inside `simulate_trades` in the
   auditing thread, SL/TP distances unchanged). On a labeled benchmark of 28
-  strategies (`bench/`), the two together caught all 16 planted leaks with
-  no false alarm on 12 clean ones; on real EURUSD 1h data the look-ahead
+  strategies (`bench/`), the two together caught all 16 leaks (15 planted,
+  1 found in a strategy written as a clean control) with no false alarm on
+  12 clean ones; on real EURUSD 1h data the look-ahead
   verdicts were the same; `null_edge` flagged 3 of 360 runs of the clean
   strategies (all at one seed) and caught a leak affecting 20% of trades in
   18 of 20 runs. An LLM
@@ -133,14 +184,16 @@ with v0.5.x before relying on them.
 - `DataQualityWarning`: emitted when bars open outside their own high/low
   (`simulate_trades` with `open_prices`), when signals close outside the
   execution data, or when a gap in the execution data delays an entry
-  (`simulate_trades_hires`). `simulate_trades_hires` now also rejects
+  (`simulate_trades_hires`), and when a `fetch_aggvault` request window has
+  no data. `simulate_trades_hires` now also rejects
   unsorted execution timestamps.
 - `check_incomplete_bars` is exported.
 - `results.quality` is set even with `preflight=False` (only the warning is
   suppressed). Previously it was `None`.
 - `examples/rsi_reversal/compare_1h_vs_hires.py` reproduces the README table.
-- `fetch_aggvault`: sends `limit=500000` explicitly (a lower server maximum
-  now fails loudly), keeps requesting inside the range when a reply stops more
+- `fetch_aggvault`: sends `limit=500000` explicitly (a server that rejects
+  it fails loudly; one that silently caps a reply below a window's size can
+  still cut the last window short), keeps requesting inside the range when a reply stops more
   than 5 days before its window end, warns about request windows with no
   data, paces requests across calls, and retries HTTP 503 as well as 429.
 
@@ -159,7 +212,7 @@ with v0.5.x before relying on them.
 
 ### Tests
 
-- 343 → 469. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
+- 343 → 492. New: `tests/test_audit.py`, `tests/test_fills.py` (gap, retrace, TP-gap, hold window, custom exit fills),
   `tests/test_utils.py` (`load_ohlcv`, `resample_ohlcv`, `find_signal_bar`),
   hires timing, coverage and timestamp units, Gate 0 trade checks (including
   overlapping 1h trades, which must not block), Gate 2 same-combo rule,

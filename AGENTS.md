@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) that use this repository to backtest a trading idea for a user. `CLAUDE.md` has the same rules in Japanese plus Claude-specific notes.
+Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) that use this repository to backtest a trading idea for a user. `CLAUDE.md` has the same rules in Japanese plus Claude-specific notes; the strategy file template below is only here.
 
 ## Before you report any backtest result
 
@@ -24,7 +24,7 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
    uv run python -m backtest_engine.audit my_strategy.py --json
    ```
 
-   It runs three groups of tests and prints JSON (`overall`: `pass` / `warn` / `fail` / `error`; exit code 1 on `fail`, 2 on `error`):
+   It runs three groups of tests and prints JSON (`overall`: `pass` / `warn` / `fail` / `error`; exit code 1 on `fail`, 2 on `error`, 0 on both `pass` and `warn`, so read `overall`):
 
    | Check | What it does | Catches |
    |---|---|---|
@@ -34,16 +34,16 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
 
 3. Report the audit with the result:
    - `fail` on `lookahead`: the backtest is invalid. Do not report its PF or win rate as a result. Show the user the `summary` (it names the likely cause from which bars changed), fix it, and run the audit again.
-   - `fail` on `null_edge`: treat it as a problem and look for it: the summary says whether the strategy makes money on random data (look-ahead) or differs from coin-flip directions (signals misaligned in time). A clean strategy fails in under 1% of runs (3 of 360 on the benchmark). Running once more with `--seed 1` (no shared random paths) helps: a second fail is conclusive; a pass after a fail is usually chance, but a weak leak (affecting a few trades) can also pass one run, so check the code at the place the summary points to before reporting. A loss on random data can also come from costs subtracted from `pnl_r` by hand: pass costs as `entry_costs` so the test can add them back.
+   - `fail` on `null_edge`: treat it as a problem and look for it: the summary says whether the strategy makes money on random data (look-ahead), differs from coin-flip directions (signals misaligned in time), or loses on random data while the coin-flip version does not (LOSS ON RANDOM DATA: entries misaligned in time, or the SL-first rule; re-run with `simulate_trades_hires` and `--seed 1`). On the benchmark a clean strategy failed in 3 of 360 runs, all three at the same seed. Running once more with `--seed 1` (no shared random paths) helps: a second fail is conclusive; a pass after a fail is usually chance, but a weak leak (affecting a few trades) can also pass one run, so check the code at the place the summary points to before reporting. A loss on random data can also come from costs subtracted from `pnl_r` by hand: pass costs as `entry_costs` so the test can add them back.
    - `warn` on `null_edge`: the SL-first rule (a bar touching both SL and TP counts as SL) makes this backtest pessimistic. Re-run with `simulate_trades_hires` (1m fills) before reporting. (Only costs passed as `entry_costs` are added back before the test; costs subtracted from `pnl_r` by hand also show up as this loss.)
    - `error`: the test could not run (too few signals or trades, a load error). Fix the input; do not treat it as a pass.
    - `pass`: say what was tested. Passing does not prove the absence of bias (survivorship, a leak that never changes a signal, or data errors are not covered).
 
 ## Other rules
 
-- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m ≈ 1 minute).
+- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m takes 2–3 minutes: the server allows 10 requests a minute).
 - Pass `open_prices` to `simulate_trades` (next-bar-open entry). Without it, entry is at the signal bar's close (optimistic).
-- Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))`. Gate 0 checks trade count, overlap, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for.
+- Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)` (`ts`: the signal bars' times). Gate 0 checks trade count, entry on the previous trade's exit bar, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for. Gate 0 raises on an error; Gates 1–4 only return a result, so check `.passed` (see `examples/gatekeeper_pipeline.py`).
 - State whether results are GROSS (no costs) or NET (`entry_costs` from `BrokerCost`).
 - Interpret PF: < 1.0 losing; 1.0–1.1 weak, likely gone after costs; 1.1–1.5 a possible edge, validate with GateKeeper; above 1.5 suspect look-ahead or overfitting first.
 - Timestamps are bar open times in UTC (Unix seconds).

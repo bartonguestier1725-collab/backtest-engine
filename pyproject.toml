@@ -28,6 +28,13 @@ dev = [
     "pytest>=8.0",
 ]
 
+# `uv sync` installs this group by default, so `uv run pytest` works after a
+# plain `uv sync`. The extra above stays for `pip install -e '.[dev]'` (CI).
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.urls]
 Repository = "https://github.com/bartonguestier1725-collab/backtest-engine"
 

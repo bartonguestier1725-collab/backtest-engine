@@ -1,6 +1,7 @@
 """RSI Reversal Strategy — Level 3: Overfitting Detection.
 
-Level 2 found RSI(21) 20/70 with PF=1.33 via parameter optimization.
+Level 2 found RSI(21) 20/70 with PF=1.37 (in-sample, 1h fills, GROSS) via
+parameter optimization.
 Is this real edge or just curve-fitting to 2023's range market?
 
 This level uses:
@@ -62,8 +63,12 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
             signal_bars.append(j)
             directions.append(SHORT)
 
-    if len(signal_bars) < 10:
-        return -999.0  # WFA/CSCV need a float, not None
+    # A window without trades scores 0R. Do not return a placeholder such as
+    # -999 for "too few trades": WFA averages it into the OOS mean, and CSCV
+    # sums it per window, which ranks parameter sets by how often they trade
+    # instead of by how well.
+    if len(signal_bars) == 0:
+        return 0.0
 
     signal_bars = np.array(signal_bars, dtype=np.int32)
     directions = np.array(directions, dtype=np.int8)
@@ -76,19 +81,11 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
         open_prices=opens, preflight=False,
     )
 
-    pnl = res["pnl_r"]
-    if len(pnl) < 10:
-        return -999.0
-
-    return float(np.sum(pnl))
+    return float(np.sum(res["pnl_r"]))
 
 
 def run_full(params: dict) -> dict | None:
     """Run backtest on full data — for Monte Carlo / StressTest."""
-    val = evaluate_fn(params)
-    if val <= -999.0:
-        return None
-
     rsi_period = params.get("rsi_period", 14)
     rsi_vals = rsi(closes, rsi_period)
     warmup = rsi_period + 1
@@ -116,6 +113,8 @@ def run_full(params: dict) -> dict | None:
         max_hold=params.get("max_hold", 48), exit_mode="rr",
         open_prices=opens, preflight=False,
     )
+    if len(res["pnl_r"]) < 10:
+        return None
     return {"pnl_r": res["pnl_r"], "pf": res.profit_factor}
 
 
@@ -130,7 +129,7 @@ bug_guard(
     resolution_minutes=60,
     n_bars=n_bars,
     bar_minutes=60,
-    n_trades=944,  # From Level 2 best
+    n_trades=943,  # From Level 2 best
     # No costs — GROSS edge testing on aggregated data
     source_path=__file__,
     strict=False,
@@ -160,11 +159,11 @@ print("  Question: Does the best in-sample param work on unseen data?\n")
 wf = WalkForward(n_bars=n_bars, is_ratio=0.7, n_splits=5, anchored=False)
 wfa_result = wf.run(param_grid, evaluate_fn)
 
-print(f"  OOS mean PnL:     {wfa_result['oos_mean']:.3f}R per trade")
+print(f"  OOS mean PnL:     {wfa_result['oos_mean']:.3f}R per OOS window (total R)")
 print(f"  OOS positive frac: {wfa_result['oos_positive_frac']:.1%} of splits profitable")
-print(f"  IS/OOS ratio:      {wfa_result['is_oos_ratio']:.2f}")
+print(f"  OOS/IS ratio:      {wfa_result['is_oos_ratio']:.2f}")
 
-# Interpret IS/OOS ratio (= OOS_mean / IS_mean; 1.0 = perfect transfer)
+# Interpret the ratio (key 'is_oos_ratio' = OOS_mean / IS_mean; 1.0 = perfect transfer)
 ratio = wfa_result['is_oos_ratio']
 if ratio < 0.3:
     print(f"  ✗ OOS/IS ratio {ratio:.2f} — OOS is {ratio:.0%} of IS. Severe overfitting.")
@@ -177,8 +176,8 @@ else:
 print("\n" + "=" * 70)
 print("Step 5: CSCV — Probability of Backtest Overfitting (Bailey 2015)")
 print("=" * 70)
-print("  Question: What fraction of IS/OOS splits would pick a param")
-print("  that actually LOSES on unseen data?\n")
+print("  Question: In what fraction of IS/OOS splits does the best IS param")
+print("  rank in the bottom half on the unseen half?\n")
 
 cscv = CSCV(n_splits=10)
 cscv_result = cscv.run(param_grid, evaluate_fn, n_bars=n_bars)
@@ -205,6 +204,7 @@ best_result = run_full({
     "rsi_period": 21, "oversold": 20, "overbought": 70,
     "sl_atr_mult": 2.5, "rr_ratio": 3.0, "max_hold": 48,
 })
+best_pf = best_result["pf"] if best_result is not None else float("nan")
 
 if best_result is not None:
     pnl = best_result["pnl_r"]
@@ -239,10 +239,10 @@ print(f"\n{'='*70}")
 print("Level 3 Summary")
 print(f"{'='*70}")
 print(f"""
-  Level 1: RSI(14) 30/70 → PF=1.05 (no edge)
-  Level 2: Optimized to RSI(21) 20/70 → PF=1.33 (looks good!)
+  Level 1: RSI(14) 30/70 → PF≈1.10 GROSS (1m fills), carried by 2023 alone
+  Level 2: Optimized to RSI(21) 20/70 → PF={best_pf:.2f} in-sample (looks good!)
   Level 3: WFA + CSCV reveal the truth:
-    - OOS performance: {wfa_result['oos_mean']:.3f}R (vs IS much higher)
+    - OOS mean: {wfa_result['oos_mean']:.1f}R per window vs IS {wfa_result['is_mean']:.1f}R
     - PBO: {pbo:.0%} — {'HIGH overfitting probability' if pbo > 0.40 else 'moderate risk' if pbo > 0.20 else 'low risk'}
     - OOS/IS ratio: {ratio:.2f} — {'severe overfitting' if ratio < 0.3 else 'significant degradation' if ratio < 0.7 else 'transfers well'}
 

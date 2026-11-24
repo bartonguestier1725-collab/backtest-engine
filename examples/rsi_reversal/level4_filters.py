@@ -1,6 +1,6 @@
 """RSI Reversal Strategy — Level 4: Structural Filters.
 
-Level 3 proved the optimized RSI alone is overfit (PBO=80%).
+Level 3 proved the optimized RSI alone is overfit (PBO≈88%).
 Can structural filters create genuine edge?
 
 Filters tested:
@@ -22,7 +22,7 @@ import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades,
     LONG, SHORT, rsi, sma, atr,
-    WalkForward, CSCV, MonteCarloDD, StressTest,
+    WalkForward, CSCV, MonteCarloDD, StressTest, GateKeeper,
 )
 
 # ── Step 1: データ取得 ────────────────────────────────────────────────
@@ -39,8 +39,17 @@ atr_vals = atr(highs, lows, closes, 14)
 sma_200 = sma(closes, 200)  # Trend filter
 
 
-def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
-    """RSI backtest with structural filters. Returns total_r."""
+def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0,
+                min_trades: int = 0) -> float:
+    """RSI backtest with structural filters. Returns total R in the window.
+
+    WFA and CSCV call this on short windows, where a filtered strategy often
+    has few or no trades: those windows score their real total R (0 for
+    none). A placeholder such as -999 would be averaged into the WFA OOS
+    mean, and CSCV would rank parameter sets by how often they trade instead
+    of by how well (on this data it turned PBO 96% into 2%). min_trades is
+    for picking the best set on the full data only: below it, -inf.
+    """
     if end_idx == 0:
         end_idx = n_bars
 
@@ -90,8 +99,8 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
             signal_bars.append(j)
             directions.append(SHORT)
 
-    if len(signal_bars) < 10:
-        return -999.0
+    if len(signal_bars) == 0:
+        return 0.0 if min_trades == 0 else float("-inf")
 
     signal_bars = np.array(signal_bars, dtype=np.int32)
     directions = np.array(directions, dtype=np.int8)
@@ -105,8 +114,8 @@ def evaluate_fn(params: dict, start_idx: int = 0, end_idx: int = 0) -> float:
     )
 
     pnl = res["pnl_r"]
-    if len(pnl) < 10:
-        return -999.0
+    if len(pnl) < min_trades:
+        return float("-inf")
     return float(np.sum(pnl))
 
 
@@ -202,10 +211,10 @@ param_grid_filtered = [
 print(f"Grid: {len(param_grid_filtered)} combos (all filters ON)")
 
 # Find best
-best_total = -999.0
+best_total = float("-inf")
 best_params = None
 for params in param_grid_filtered:
-    total = evaluate_fn(params)
+    total = evaluate_fn(params, min_trades=10)
     if total > best_total:
         best_total = total
         best_params = params
@@ -245,7 +254,7 @@ print(f"\n  Walk-Forward: {len(param_grid_filtered)} params, 5 splits...")
 wf = WalkForward(n_bars=n_bars, is_ratio=0.7, n_splits=5, anchored=False)
 wfa_result = wf.run(param_grid_filtered, evaluate_fn)
 ratio = wfa_result['is_oos_ratio']
-print(f"  OOS mean PnL:      {wfa_result['oos_mean']:.3f}R")
+print(f"  OOS mean PnL:      {wfa_result['oos_mean']:.3f}R per OOS window (total R)")
 print(f"  OOS positive frac: {wfa_result['oos_positive_frac']:.1%}")
 print(f"  OOS/IS ratio:      {ratio:.2f}")
 
@@ -281,21 +290,37 @@ if best_params:
     print(f"    Combined deg DD@95%:   {report['degraded']['combined']['dd_95']*100:.1f}%")
 
 # ── Summary: Level 1-4 comparison ────────────────────────────────────
+# Same rule as GateKeeper Gate 3: the WFA and the CSCV must both pass.
+# A low PBO alone only says the parameter ranking is stable between halves;
+# it does not say the strategy makes money out of sample.
+oos_frac = wfa_result['oos_positive_frac']
+wfa_ok = oos_frac >= GateKeeper.GATE3_MIN_WFA_WINRATE
+pbo_ok = pbo <= GateKeeper.GATE3_MAX_PBO
+if wfa_ok and pbo_ok:
+    verdict = "✓ Passes the Gate 3 rule (WFA and CSCV): worth testing further"
+elif pbo_ok:
+    verdict = ("✗ PBO is low, but the WFA fails: the best in-sample params lose\n"
+               "    out of sample. Even with filters, RSI reversal on EURUSD lacks robust edge")
+else:
+    verdict = "✗ Even with filters, RSI reversal on EURUSD lacks robust edge"
+
 print(f"\n{'='*70}")
 print("Final Summary: Levels 1-4")
 print(f"{'='*70}")
 print(f"""
-  Level 1: RSI(14) 30/70, no filter        → PF=1.05, no edge
-  Level 2: RSI(21) 20/70, no filter        → PF=1.33, "looks good" (in-sample)
-  Level 3: WFA+CSCV on Level 2             → PBO=80%, OVERFIT
-  Level 4: RSI + trend/time/vol filters    → PBO={pbo:.0%}
+  Level 1: RSI(14) 30/70, no filter        → PF≈1.10 GROSS (1m fills), carried by 2023
+  Level 2: RSI(21) 20/70, no filter        → PF≈1.37, "looks good" (in-sample)
+  Level 3: WFA+CSCV on Level 2             → PBO≈88%, OVERFIT
+  Level 4: RSI + trend/time/vol filters    → WFA OOS positive {oos_frac:.0%} of splits
+                                             (min {GateKeeper.GATE3_MIN_WFA_WINRATE:.0%}), PBO={pbo:.0%} (max {GateKeeper.GATE3_MAX_PBO:.0%})
 
-  {'✓ Filters reduced overfitting!' if pbo < 0.40 else '⚠ Filters helped but PBO still high' if pbo < 0.60 else '✗ Even with filters, RSI reversal on EURUSD lacks robust edge'}
+  {verdict}
 
   Key takeaways:
   1. Parameter optimization alone ≠ real edge (Level 2→3)
-  2. Structural filters (trend/time/vol) improve robustness
-  3. PBO is the ultimate arbiter: <40% to trust a strategy
+  2. Filters change which trades you take; they do not create an edge by themselves
+  3. Judge with the WFA and the CSCV together (GateKeeper Gate 3): PBO says
+     whether the in-sample ranking holds, the WFA says whether it makes money
   4. RSI reversal as a standalone system has fundamental limits
      on trending pairs like EURUSD
 """)

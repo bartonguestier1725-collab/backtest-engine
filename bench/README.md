@@ -1,10 +1,10 @@
 # Audit benchmark
 
-How well do the checks in `backtest_engine.audit` find look-ahead bias? 28 small strategy files with known answers: 16 with a planted leak, 12 without. File names (`s01.py` …) and code carry no hint; the answers are in `labels.json`.
+How well do the checks in `backtest_engine.audit` find look-ahead bias? 28 small strategy files with known answers: 16 with a leak (15 planted, and s05, written as a clean control, which turned out to leak; see Limits), 12 without. File names (`s01.py` …) carry no hint, but a few comments say what a line does (s08: `# enter at the open of the signal bar itself`; s11: `# keep one value in four, then fill`), which may have helped the LLM. The answers are in `labels.json`.
 
 ```bash
 uv run python bench/run_bench.py      # all checks on all cases (~1 min), writes results.json
-uv run python bench/robustness.py     # other seeds, and real EURUSD 1h if AGGVAULT_KEY is set
+uv run python bench/robustness.py     # other seeds, and real EURUSD 1h if AGGVAULT_KEY is set (without it, robustness.json is rewritten without the real-data verdicts)
 uv run python bench/false_alarms.py   # null_edge on the clean cases, 30 seeds each (~7 min)
 uv run python bench/weak_leaks.py     # null_edge against a leak in only some trades
 uv run python bench/score_llm.py      # scores the saved LLM answers in llm/
@@ -20,12 +20,14 @@ A check "catches" a case when its verdict is `fail` or `warn`.
 | `lookahead` (rewrite the future, re-run `signals`) | 12 | 0 |
 | `null_edge` (backtest on random walks, vs. coin-flip directions) | 12 | 0 |
 | Either audit check | **16** | **0** |
-| LLM reading the strategy file (Claude Sonnet, `run_llm.sh`) | 15 | 1 |
+| LLM reading the strategy file (Claude Code `--model sonnet`, `run_llm.sh`; the model version was not recorded) | 15 | 1 |
+
+s24 and s25 define only `backtest()`, so `lookahead` does not run on them: it caught 12 of the 15 leaky cases it ran on, with no false alarm on 11 clean ones.
 
 What each check missed, and why:
 
 - `lookahead` cannot see leaks in `backtest()` (an entry one bar early, an exit that uses the next bar, a target computed from later highs) or in library code, since it only re-runs `signals()`: s03, s07, s08, s24.
-- `null_edge` misses leaks that do not create an edge on random data or tilt the directions: a full-sample z-score, a full-sample volatility quantile, a backward fill, and a threshold computed from a window that includes later bars (s05, s11, s20, s22). These still distort a real backtest.
+- `null_edge` misses leaks that do not create an edge on random data or tilt the directions: a full-sample z-score, a full-sample volatility quantile, a backward fill, and a threshold computed from a window that includes later bars (s22, s20, s11, s05). These still distort a real backtest.
 - The LLM caught every leak that is visible in the strategy file, including the one in s05. It missed s24, whose strategy file is correct and whose leak is inside an imported helper (`cases/hires_lib.py`, a copy of `simulate_trades_hires` before v0.6.0, which entered 59 minutes early). `null_edge` finds it without reading any code: −0.21R per trade before costs on random walks (t = −12.2), against +0.009R for the same entries with coin-flip directions; the fixed engine (s25) gives −0.002R (t = −0.1).
 - The LLM's false alarm is s28 (clean): its JSON said `true` while its own reason said no look-ahead was found.
 
@@ -46,9 +48,7 @@ Weak leaks (`weak_leaks.json`): an RSI strategy where a fraction of the trades e
 | 20% | 4/20 fail | 18/20 fail |
 | 50% | 20/20 fail | 20/20 fail |
 
-Each of the 12 leaky cases that `null_edge` catches also failed at 3 more seeds (`robustness.json`).
-
-Robustness (`robustness.json`): on real EURUSD 1h data (2024) instead of a random walk, the `lookahead` verdicts are the same for every case (no false alarm on the 11 clean cases that have `signals`). Over 5 other seeds, every signal-level leak failed 5/5 times except s05, whose leak only affects bars 500–749 (4/5).
+Robustness (`robustness.json`): on real EURUSD 1h data (2024) instead of a random walk, the `lookahead` verdicts are the same for every case (no false alarm on the 11 clean cases that have `signals`). Over 5 other seeds, every signal-level leak failed 5/5 times except s05, whose leak only affects bars 500–749 (4/5). Each of the 12 leaky cases that `null_edge` catches was also flagged (fail or warn; the file does not tell them apart) at 3 more seeds.
 
 ## Limits
 

@@ -271,6 +271,15 @@ class TestFetchAggvaultErrors:
             ts, *_ = fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
         assert list(ts) == [1617235200]
 
+    def test_retried_429_reply_is_closed(self):
+        """The 429 reply is closed before the retry (no ResourceWarning)."""
+        bars = [{"time": 1617235200, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}]
+        err = _mock_http_error(429)
+        with patch("urllib.request.urlopen", side_effect=[err, _mock_response(bars)]), \
+                patch("backtest_engine.data._sleep"):
+            fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
+        assert err.fp is None or err.fp.closed
+
     def test_500_raises_with_code(self):
         with patch("urllib.request.urlopen", side_effect=_mock_http_error(500, "Internal Server Error")):
             with pytest.raises(RuntimeError, match="API error 500"):

@@ -97,6 +97,7 @@ def _get_bars(url, key, symbol, timeframe, base_url, max_retries, last_request):
                     wait = min(max(float(e.headers.get("Retry-After", wait)), 1.0), 120.0)
                 except (TypeError, ValueError, AttributeError):
                     pass
+                e.close()  # else a ResourceWarning names the unread 429 reply
                 _sleep(wait)
                 last_request[0] = 0.0  # the wait above already paces the retry
                 continue

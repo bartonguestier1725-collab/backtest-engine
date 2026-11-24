@@ -38,6 +38,8 @@ print("=" * 60)
 # ── Results ────────────────────────────────────────────────────────────
 if len(trades) > 0:
     bc = BrokerCost.tradeview_ilc()
+    # BrokerCost uses 1 pip = $0.01 for XAUUSD, so these pips are 10x the
+    # stage1_*.py figures, which use $0.10 to match the article.
     trades["pnl_price"] = trades["exit_price"] - trades["entry_price"]
     trades["pnl_pips"] = bc.price_to_pips("XAUUSD", trades["pnl_price"])
 
@@ -74,7 +76,7 @@ fake_sl = np.full(len(trades), avg_price * 0.5)  # 50% of price = effectively no
 
 run_all_checks(
     resolution_minutes=60,
-    n_bars=len(df),
+    n_bars=len(timestamps),
     bar_minutes=60,
     n_trades=len(trades),
     sl_distances=fake_sl,

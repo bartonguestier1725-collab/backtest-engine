@@ -3,10 +3,10 @@
 Kill bad strategies in 5 minutes, not 7 hours.
 
 Gate 0: Data validation (1 min)    — Do we have enough data? Correct costs?
-Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. PF < 1.05 → dead.
+Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. Best PF < 1.05 → dead.
 Gate 2: Coarse screen (20 min)     — Run ~100 combos. No combo with PF >= 1.10 AND RF >= 1.5 → dead.
-Gate 3: WFA + CSCV (30 min)       — PBO < 0.40, OOS win rate >= 0.55 → dead.
-Gate 4: Monte Carlo (5 min)        — MC pass rate >= 0.70 → dead.
+Gate 3: WFA + CSCV (30 min)        — PBO > 0.40 or WFA OOS positive splits < 0.55 → dead.
+Gate 4: Monte Carlo (5 min)        — MC pass rate < 0.70 → dead.
 
 Default thresholds are tuned for FX. Override them via class variables
 (e.g. ``gk.GATE1_MIN_PF = 1.10``) for other asset classes.
@@ -24,8 +24,8 @@ Usage:
     )
 
     # Gate 0: auto-runs BugGuard. Pass the simulation result so the
-    # trade-level checks (trade count, overlapping trades, no-SL, open-price
-    # entry, fixed cost) run too.
+    # trade-level checks (trade count, entry on the previous exit bar, no-SL,
+    # open-price entry, fixed cost) run too.
     gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))
 
     # Gate 1: provide a function that takes param_dict → metric_dict
@@ -158,8 +158,8 @@ class GateKeeper:
         Parameters
         ----------
         trades : TradeResults from simulate_trades / simulate_trades_hires.
-                 Enables BG-06b (trade count), BG-08 (overlapping trades,
-                 WARN), BG-09b (open-price entry) and BG-12 (fixed cost,
+                 Enables BG-06b (trade count), BG-08 (entry on the previous
+                 trade's exit bar, WARN), BG-09b (open-price entry) and BG-12 (fixed cost,
                  inferred from ``cost_r``). NO_FILL trades are ignored.
                  None of these find look-ahead inside the signal code; use
                  ``backtest_engine.audit`` for that.
