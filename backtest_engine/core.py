@@ -913,6 +913,9 @@ def simulate_trades(
                as the first; with close or limit entry the first is the next bar.
     exit_mode : "rr" (fixed RR), "trailing", "custom", or "sar_trailing".
     be_trigger_pct : Fraction of TP distance that triggers breakeven (0=disabled).
+                     ``be_trigger_pct``, ``retrace_pct`` and ``retrace_timeout``
+                     work with exit_mode="rr" only; other modes raise if they
+                     are not 0.
     retrace_pct : Fraction of TP distance for limit entry (0=market order).
                   The limit is placed this far from close[sig_bar]; SL/TP are
                   measured from the limit (fill) price. On the fill bar only
@@ -989,6 +992,18 @@ def simulate_trades(
             raise ValueError("sl_distances must be > 0 (used as divisor for R-multiples)")
     if max_hold < 1:
         raise ValueError("max_hold must be >= 1 (bars a trade may be held)")
+    if exit_mode != "rr":
+        # Only the rr kernel reads these; other modes would ignore them and
+        # silently return market entries without breakeven.
+        rr_only = [name for name, v in (("be_trigger_pct", be_trigger_pct),
+                                        ("retrace_pct", retrace_pct),
+                                        ("retrace_timeout", retrace_timeout)) if v]
+        if rr_only:
+            raise ValueError(
+                f"{', '.join(rr_only)} only work with exit_mode='rr'; "
+                f"exit_mode={exit_mode!r} would ignore them. Leave them at 0 "
+                f"or use exit_mode='rr'."
+            )
 
     if open_prices is not None:
         o_chk = np.asarray(open_prices, dtype=np.float64)

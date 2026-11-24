@@ -64,6 +64,24 @@ class TradeResults(np.ndarray):
         return "GROSS (no execution costs)" if self.is_gross else "NET (costs applied)"
 
     # ── Convenience metrics ─────────────────────────────────────────────
+    #
+    # Win rate, expectancy, geometric mean, Sharpe and Sortino count filled
+    # trades only: a NO_FILL row (limit never reached, signal outside the
+    # data) has pnl_r = 0 and is not a trade. PF, max DD and recovery factor
+    # are the same either way, since 0R rows add nothing to them.
+
+    def _filled_pnl(self) -> np.ndarray:
+        from backtest_engine._types import EXIT_NO_FILL
+        arr = np.asarray(self)
+        return np.asarray(arr["pnl_r"][arr["exit_type"] != EXIT_NO_FILL])
+
+    @property
+    def n_filled(self) -> int:
+        """Number of trades that filled (``len(results)`` also counts NO_FILL rows).
+
+        Use this as ``n_trades`` in a GateKeeper ``run_func``.
+        """
+        return int(len(self._filled_pnl()))
 
     @property
     def profit_factor(self) -> float:
@@ -79,29 +97,32 @@ class TradeResults(np.ndarray):
 
     @property
     def win_rate(self) -> float:
-        """Fraction of trades with pnl_r > 0.  Returns 0.0 if empty."""
-        if len(self) == 0:
+        """Fraction of filled trades with pnl_r > 0.  Returns 0.0 if none filled."""
+        pnl = self._filled_pnl()
+        if len(pnl) == 0:
             return 0.0
-        return float(np.mean(np.asarray(self["pnl_r"]) > 0))
+        return float(np.mean(pnl > 0))
 
     @property
     def expectancy_r(self) -> float:
-        """Mean pnl_r (expected R per trade).  Returns 0.0 if empty."""
-        if len(self) == 0:
+        """Mean pnl_r per filled trade.  Returns 0.0 if none filled."""
+        pnl = self._filled_pnl()
+        if len(pnl) == 0:
             return 0.0
-        return float(np.mean(np.asarray(self["pnl_r"])))
+        return float(np.mean(pnl))
 
     @property
     def geometric_mean_r(self) -> float:
         """Geometric mean of (1 + risk_frac * pnl_r) - 1, using risk_frac=0.01.
 
-        Approximates the per-trade compound growth rate.  Returns 0.0 if
-        empty or if any trade causes total ruin (equity <= 0).
+        Approximates the per-trade compound growth rate over filled trades.
+        Returns 0.0 if none filled or if any trade causes total ruin
+        (equity <= 0).
         """
-        if len(self) == 0:
+        pnl = self._filled_pnl()
+        if len(pnl) == 0:
             return 0.0
         risk_frac = 0.01
-        pnl = np.asarray(self["pnl_r"])
         factors = 1.0 + risk_frac * pnl
         if np.any(factors <= 0):
             return 0.0
@@ -110,10 +131,11 @@ class TradeResults(np.ndarray):
 
     @property
     def sharpe_r(self) -> float:
-        """Sharpe-like ratio: mean(pnl_r) / std(pnl_r).  Returns 0.0 if < 2 trades."""
-        if len(self) < 2:
+        """Sharpe-like ratio over filled trades: mean(pnl_r) / std(pnl_r).
+        Returns 0.0 if fewer than 2 filled."""
+        pnl = self._filled_pnl()
+        if len(pnl) < 2:
             return 0.0
-        pnl = np.asarray(self["pnl_r"])
         std = float(np.std(pnl, ddof=1))
         if std == 0.0:
             return 0.0
@@ -121,10 +143,11 @@ class TradeResults(np.ndarray):
 
     @property
     def sortino_r(self) -> float:
-        """Sortino-like ratio: mean(pnl_r) / downside_std(pnl_r).  Returns 0.0 if < 2 trades."""
-        if len(self) < 2:
+        """Sortino-like ratio over filled trades: mean(pnl_r) / downside_std(pnl_r).
+        Returns 0.0 if fewer than 2 filled."""
+        pnl = self._filled_pnl()
+        if len(pnl) < 2:
             return 0.0
-        pnl = np.asarray(self["pnl_r"])
         downside = pnl[pnl < 0]
         if len(downside) < 2:
             return float("inf") if float(np.mean(pnl)) > 0 else 0.0

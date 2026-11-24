@@ -77,6 +77,9 @@ class WalkForward:
         ----------
         param_grid : List of parameter dicts to test.
         evaluate_fn : Function(params, start_bar, end_bar) → metric (higher=better).
+                      Return the window's real value (e.g. total R), 0 for a
+                      window without trades; a placeholder such as -999 is
+                      averaged into ``oos_mean``.
 
         Returns
         -------
@@ -156,7 +159,10 @@ class CSCV:
         Parameters
         ----------
         param_grid : List of parameter dicts to test.
-        evaluate_fn : Function(params, start_bar, end_bar) → metric.
+        evaluate_fn : Function(params, start_bar, end_bar) → metric. Return
+                      the window's real value, 0 without trades; a placeholder
+                      such as -999 is summed per partition and decides the
+                      ranking, so PBO then measures how often a set trades.
         n_bars : Total number of bars.
 
         Returns

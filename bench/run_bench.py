@@ -2,7 +2,8 @@
 
 For each case: static source checks (BugGuard BG-04/07/09), the look-ahead
 test, the null-data test, and "any" (flagged by at least one). A case counts
-as flagged by a test when the verdict is fail or warn.
+as flagged by a test when the verdict is fail or warn (a test that did not
+run because the file lacks signals() or backtest() is a warn, not a flag).
 """
 import json
 import sys
@@ -19,7 +20,8 @@ for cid, lab in sorted(labels.items()):
     t0 = time.time()
     rep = audit.audit_strategy(HERE / "cases" / f"{cid}.py", n_cuts=int(sys.argv[1]) if len(sys.argv) > 1 else 32)
     by = {r["check"]: r for r in rep["results"]}
-    flag = lambda r: r is not None and r["verdict"] in ("fail", "warn")
+    flag = lambda r: (r is not None and r["verdict"] in ("fail", "warn")
+                      and not r.get("details", {}).get("not_run"))
     static = any(flag(r) for k, r in by.items() if k.startswith("source:"))
     look = flag(by.get("lookahead"))
     null = flag(by.get("null_edge"))

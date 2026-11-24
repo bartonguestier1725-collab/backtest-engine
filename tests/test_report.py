@@ -162,3 +162,19 @@ class TestGenerateReport:
         cfg = ReportConfig(title="BigDD", equity_curve=equity)
         out = generate_report(cfg, tmp_html)
         assert out.stat().st_size > 0
+
+
+class TestNoFillLeftOut:
+    def test_no_fill_rows_not_counted(self, tmp_html):
+        from backtest_engine._types import EXIT_NO_FILL
+        trades = _make_trades(50)
+        arr = np.asarray(trades)
+        arr["exit_type"][:10] = EXIT_NO_FILL
+        arr["pnl_r"][:10] = 0.0
+        generate_report(ReportConfig(title="t", trades=trades,
+                                     trade_timestamps=_make_timestamps()), tmp_html)
+        html = tmp_html.read_text()
+        assert "約定しなかったシグナル 10 件" in html
+        # Exit shares are of the 40 filled trades
+        n_sl = int(np.sum(arr["exit_type"][10:] == EXIT_SL))
+        assert f"<td>{n_sl}</td><td>{n_sl / 40 * 100:.1f}%</td>" in html

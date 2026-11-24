@@ -1,8 +1,39 @@
 # Changelog
 
-## Unreleased
+## v0.6.1
 
-Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
+Fixes found in a clean-clone check of v0.6.0. Fills and `pnl_r` do not
+change. Some metrics and checks do (first section).
+
+### Changed
+
+- **Win rate, expectancy, geometric mean, Sharpe and Sortino count filled
+  trades only.** `NO_FILL` rows (pnl_r = 0: a limit order that never filled,
+  a signal on the last bar or outside the 1m data) were counted as trades and
+  diluted them. PF, total R, max DD and recovery factor are unchanged. New
+  `results.n_filled` gives the trade count; use it as `n_trades` in a
+  GateKeeper `run_func` (`len(results)` counts the `NO_FILL` rows too, and
+  Gates 1–2 compare it with their minimum trade counts). The HTML report
+  leaves `NO_FILL` rows out of the histogram, the monthly and yearly tables
+  and the exit shares, and says how many it left out.
+- **BG-06 uses the bar times.** `bug_guard(timestamps=)` and
+  `gk.gate0_validate(timestamps=)` ignored them for the data period and
+  estimated it from the bar count. They now measure the first to the last bar
+  time; timestamps in milliseconds or nanoseconds are a BG-06 ERROR. Without
+  timestamps the estimate is 24 h × 22 days a month (528 1h bars), not
+  17 h × 22 days (374): FX trades about 21.7 days of 24 h, so the old
+  estimate read 8.7 months of AggVault EURUSD 1h as 12.1 months and passed
+  the 12-month minimum. The new one errs short (5 years read as 59 months).
+  Data that passed before can now fail, e.g. 300,000 1m bars (9.5 months).
+- **`simulate_trades` raises on options it would ignore.** A non-zero
+  `be_trigger_pct`, `retrace_pct` or `retrace_timeout` with an `exit_mode`
+  other than `"rr"` raises `ValueError` (it entered at market without
+  breakeven). Also through `simulate_trades_hires`.
+- **The audit no longer passes a file it tested only half of.** A file with
+  only `signals()` or only `backtest()` gets a `warn` for the missing test
+  (`details["not_run"]`, and a summary of what was not tested) instead of an
+  overall `pass`. The exit code stays 0. `bench/run_bench.py` does not count
+  these as catches, so the benchmark numbers do not change.
 
 ### Examples
 
@@ -41,6 +72,8 @@ Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
   "nan months"). Timestamps with and without a time zone can be mixed.
 - Gate 3's message says "WFA OOS positive split share" (the share of WFA
   splits with a positive OOS metric), not "win rate".
+- BG-12 said "Per-trade cost used (correct)" also when no cost was applied.
+  It now says GROSS (no cost), per-trade cost, or not checked.
 
 ### Docs
 
@@ -48,14 +81,18 @@ Fixes found in a clean-clone check of v0.6.0. Engine results do not change.
   `bug_guard()`/GateKeeper cannot take `start_ts`/`end_ts`; BugGuard has no
   default cost registry; `generate_report` builds the equity curve and the
   Gate/WFA/CSCV tables only from values you pass (`WfaRow`, `CscvResult`),
-  and DD% needs a balance curve, not cumulative R; `custom` exits ignore TP
-  and `be_trigger_pct`/`retrace_pct` apply to `exit_mode="rr"` only;
-  metrics count `NO_FILL` rows; Gate 3 uses the share of WFA splits with a
+  and DD% needs a balance curve, not cumulative R; `custom` exits ignore TP;
+  Gate 3 uses the share of WFA splits with a
   positive OOS metric, not a trade win rate; Gates 1–4 do not stop on a
   failure; BG-08 reports only entries on the previous exit bar; the audit's
   third `null_edge` failure (LOSS ON RANDOM DATA) and its exit code 0 for
   `warn`; 5 years of 1m data take 2–3 minutes (146 s measured), not one.
 - `gatekeeper.py` docstring stated the kill conditions backwards.
+- CLAUDE.md, AGENTS.md, README and the `WalkForward`/`CSCV` docstrings:
+  `evaluate_fn` returns the window's real metric, 0 without trades, never a
+  placeholder such as -999.
+- README: removed "10-50x faster" and the Time column of the Gate table (no
+  measurement behind either), and the per-gate times in `gatekeeper.py`.
 
 ## v0.6.0
 

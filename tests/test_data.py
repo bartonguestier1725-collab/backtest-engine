@@ -179,7 +179,7 @@ class TestFetchAggvaultHTTP:
             fetch_aggvault("EURUSD", "1h", "2021-04-01", "2021-04-02", api_key="tk_x")
 
         req = mock_open.call_args[0][0]
-        assert req.get_header("User-agent") == "backtest-engine/0.6.0"
+        assert req.get_header("User-agent") == "backtest-engine/0.6.1"
 
     def test_authorization_header_set(self):
         with patch("urllib.request.urlopen", return_value=_mock_response(self.SAMPLE_BARS)) as mock_open:

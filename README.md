@@ -1,6 +1,6 @@
 # backtest_engine
 
-Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-loop backtests into **10-50x faster** simulations.
+Numba JIT-accelerated trade simulator and validation toolkit.
 
 **What this is:** A fast bar-based trade simulator that takes OHLC data + pre-computed signals and evaluates each trade independently. Includes automated bug detection and stage-gate validation.
 
@@ -23,7 +23,7 @@ Numba JIT-accelerated trade simulator and validation toolkit. Turns Python for-l
 
 - **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
 - **Strategy audit** (`python -m backtest_engine.audit my_strategy.py --json`) — finds look-ahead by behavior, not by reading code: rewrites the future and checks that past signals do not change, and runs the whole backtest on random walks where no edge can exist. JSON output for AI assistants. Measured on a labeled benchmark of 28 strategies ([bench/](bench/README.md))
-- **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. The data period (BG-06) is estimated from the bar count with FX market hours; for other markets call `check_data_period()` with `start_ts`/`end_ts`. These are pattern and index checks: use the audit for look-ahead in signal code
+- **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. The data period (BG-06) comes from the bar times when you pass `timestamps`; without them it is estimated from the bar count at FX hours, which reads other markets far too short. These are pattern and index checks: use the audit for look-ahead in signal code
 - **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard (pass your simulation result so the trade-level checks run), Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
 
 ## Install
@@ -119,8 +119,8 @@ For this strategy the two are close. The difference can be larger when SL/TP are
 | `exit_mode="trailing"` | Trailing stop |
 | `exit_mode="sar_trailing"` | Parabolic SAR-based trailing (with direction-aware Plan B) |
 | `exit_mode="custom"` | SL + exit on an external signal (`tp_distances` is ignored) |
-| `be_trigger_pct` | Move SL to entry price when profit reaches this fraction of TP (0 = disabled). `exit_mode="rr"` only; other modes ignore it |
-| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP from the signal close before filling (0 = market entry). SL/TP are measured from the fill price. `exit_mode="rr"` only; other modes ignore it and enter at market |
+| `be_trigger_pct` | Move SL to entry price when profit reaches this fraction of TP (0 = disabled). `exit_mode="rr"` only; other modes raise `ValueError` if it is not 0 |
+| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP from the signal close before filling (0 = market entry). SL/TP are measured from the fill price. `exit_mode="rr"` only (with `retrace_timeout`); other modes raise `ValueError` if either is not 0 |
 | `retrace_timeout` | Max bars to wait for limit fill before cancelling (`exit_mode="rr"` only) |
 | `trail_activation_r` | R-multiple required to activate trailing stop |
 | `trail_distance_r` | Trailing stop distance in R-multiples |
@@ -208,7 +208,7 @@ expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJ
 
 Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`. BG-05 always runs (it assumes 60-minute fills unless you pass `resolution_minutes`).
 
-The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06: bar count at 22 days × 17 h a month). `bug_guard()` and `GateKeeper` always use it; for calendar dates call `check_data_period(n_bars, bar_minutes, start_ts=ts[0], end_ts=ts[-1])` directly (Unix seconds or timestamps).
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars). FX trades about 21.7 days a month, so it errs short (5 years of AggVault EURUSD 1h reads as 59 months), and a market open fewer hours reads much shorter. With `timestamps` (Unix seconds, as `bug_guard()` and `gk.gate0_validate()` take them), BG-06 uses the first and last bar time instead; milliseconds are an ERROR. `check_data_period(n_bars, bar_minutes, start_ts=, end_ts=)` does the same on its own.
 
 ```python
 from backtest_engine import bug_guard, BrokerCost, EXIT_NO_FILL
@@ -279,7 +279,7 @@ uv run python -m backtest_engine.audit my_strategy.py          # or --json; --cs
 | `null_edge` | Runs `backtest` on 120 driftless random walks and tests the mean R per trade before costs (paths as clusters). Each bar's high/low come from a continuous (Brownian bridge) path, so stops and targets fill at their level fairly. The same backtest is also run with every trade's direction replaced by a coin flip inside `simulate_trades` (same entries, SL/TP distances and exit rules) as a placebo | Entries placed before their signal, exits or targets that use later bars, timing bugs inside libraries; and a backtest made pessimistic by the SL-first rule (`warn`) |
 | `source:BG-04/07/09` | BugGuard source patterns | Some backward-fill and full-period quantile patterns, entry at close (pattern matching only) |
 
-Exit code 1 on `fail`, 2 on `error`, 0 on `pass` and `warn` (read `overall`). In Python: `from backtest_engine.audit import audit_strategy, check_lookahead, check_null_edge`; `audit_strategy` runs each audit in a fresh Python process, so strategies and their helpers never see another audit's modules. The audit runs the strategy's code with your permissions; it is not a sandbox. `null_edge` flags |t| > 3.5. On the benchmark it flagged 3 of 360 runs of clean strategies (12 strategies × 30 seeds), all at one seed; it caught a leak affecting 20% of trades in 18 of 20 runs. Different `--seed` values share no random path, so a clean strategy almost never fails twice; a weak leak can pass a single run.
+Exit code 1 on `fail`, 2 on `error`, 0 on `pass` and `warn` (read `overall`). A file with only one of `signals` and `backtest` gets a `warn` for the other check, with `"not_run": true` in its details and a summary of what was not tested. In Python: `from backtest_engine.audit import audit_strategy, check_lookahead, check_null_edge`; `audit_strategy` runs each audit in a fresh Python process, so strategies and their helpers never see another audit's modules. The audit runs the strategy's code with your permissions; it is not a sandbox. `null_edge` flags |t| > 3.5. On the benchmark it flagged 3 of 360 runs of clean strategies (12 strategies × 30 seeds), all at one seed; it caught a leak affecting 20% of trades in 18 of 20 runs. Different `--seed` values share no random path, so a clean strategy almost never fails twice; a weak leak can pass a single run.
 
 On the [benchmark](bench/README.md) (16 strategies with a leak: 15 planted and 1 found in a strategy written as a clean control; 12 without), the two checks together caught all 16 with no false alarm. An LLM reading each strategy file caught 15, with 1 false alarm. It missed the one leak inside an imported helper whose source it was not shown (the pre-v0.6.0 `simulate_trades_hires`, described in the prompt as documented); `null_edge` found it without reading code, and the LLM found it once given the helper's source. Passing does not prove the absence of bias: a leak that never flips a signal, survivorship, and bad data are not covered.
 
@@ -320,15 +320,17 @@ gk.GATE4_MIN_MC_PASS = 0.80
 
 ### Gate details
 
-| Gate | Time | What it checks | Kill condition |
-|------|------|---------------|----------------|
-| Gate 0 | 1 min | BugGuard (the checks whose inputs you passed) + input completeness | Any BG ERROR → RuntimeError |
-| Gate 1 | 5 min | ~20 param combos on full data | Best PF < 1.05 |
-| Gate 2 | 20 min | ~100 param combos, PF + Recovery Factor | No single combo with PF >= 1.10 and RF >= 1.5 |
-| Gate 3 | 30 min | Share of WFA splits with a positive OOS metric (`oos_positive_frac`) + CSCV PBO | That share < 0.55 or PBO > 0.40 |
-| Gate 4 | 5 min | Monte Carlo DD pass rate + confidence percentile | DD@confidence > dd_limit or pass rate < 0.70 |
+| Gate | What it checks | Kill condition |
+|------|---------------|----------------|
+| Gate 0 | BugGuard (the checks whose inputs you passed) + input completeness | Any BG ERROR → RuntimeError |
+| Gate 1 | ~20 param combos on full data | Best PF < 1.05 |
+| Gate 2 | ~100 param combos, PF + Recovery Factor | No single combo with PF >= 1.10 and RF >= 1.5 |
+| Gate 3 | Share of WFA splits with a positive OOS metric (`oos_positive_frac`) + CSCV PBO | That share < 0.55 or PBO > 0.40 |
+| Gate 4 | Monte Carlo DD pass rate + confidence percentile | DD@confidence > dd_limit or pass rate < 0.70 |
 
-Gate 0 also emits a `GK-00 WARN` listing every missing input (`source_path`, `spreads_used`, `n_bars`, `resolution_minutes`, `trades`, `sl_distances` + `avg_price`, `timestamps`) and the checks it skips. If `resolution_minutes` is not given, BG-05 assumes the fills were simulated on `bar_minutes` bars. With `trades`, BG-08 reports trades that enter on the bar where the previous trade exits as a WARN (trades are simulated independently, so overlap is not a bug by itself; deeper overlaps are not reported). BG-01 and BG-13 do not run in Gate 0: call `bug_guard()` for them. Gate 0 does not look for look-ahead in your signal code; run the [strategy audit](#strategy-audit) for that.
+How long each gate takes depends on your `run_func` and `evaluate_fn`; Gate 1 and 2 run one backtest per combo.
+
+Gate 0 also emits a `GK-00 WARN` listing every missing input (`source_path`, `spreads_used`, `n_bars` or `timestamps`, `resolution_minutes`, `trades`, `sl_distances` + `avg_price`, `timestamps`) and the checks it skips or estimates. `timestamps` are the times of every bar of the signal timeframe; BG-06 takes the data period from them. If `resolution_minutes` is not given, BG-05 assumes the fills were simulated on `bar_minutes` bars. With `trades`, BG-08 reports trades that enter on the bar where the previous trade exits as a WARN (trades are simulated independently, so overlap is not a bug by itself; deeper overlaps are not reported). BG-01 and BG-13 do not run in Gate 0: call `bug_guard()` for them. Gate 0 does not look for look-ahead in your signal code; run the [strategy audit](#strategy-audit) for that.
 
 ### run_func
 
@@ -341,6 +343,8 @@ def run_func(params: dict) -> dict | None:
     or None if no trades.
     """
 ```
+
+Use `results.n_filled` for `n_trades`: `len(results)` also counts `NO_FILL` rows (limit orders that never filled, signals outside the data), and Gates 1–2 compare `n_trades` with their minimum trade counts.
 
 ### Gate 3: WFA + CSCV
 
@@ -384,6 +388,7 @@ gk.gate4_montecarlo(mc, dd_limit=0.20, confidence=95.0)
 results = simulate_trades(...)
 
 print(f"PF: {results.profit_factor:.2f}")       # Gross profit / gross loss
+print(f"Trades: {results.n_filled}")            # Filled trades (len() also counts NO_FILL)
 print(f"Win rate: {results.win_rate:.1%}")       # Fraction of winning trades
 print(f"Expectancy: {results.expectancy_r:.3f}R") # Mean PnL per trade
 print(f"Geo mean: {results.geometric_mean_r:.4f}") # Geometric growth rate
@@ -393,7 +398,7 @@ print(f"Max DD: {results.max_drawdown_r:.1f}R")  # Peak-to-trough in R
 print(f"RF: {results.recovery_factor:.2f}")      # total_r / max_dd_r
 ```
 
-All properties handle edge cases (empty results, no losses, no wins) and return plain floats. They count `NO_FILL` rows (pnl_r = 0) as trades; with limit entries (`retrace_pct`), filter first: `results[results["exit_type"] != EXIT_NO_FILL]`.
+All properties handle edge cases (empty results, no losses, no wins) and return plain floats. Win rate, expectancy, geometric mean, Sharpe and Sortino count filled trades only: a `NO_FILL` row (pnl_r = 0) is a signal that never entered. PF, max DD and recovery factor are the same either way. Before v0.6.1 they counted `NO_FILL` rows as trades, which diluted win rate and expectancy for limit entries.
 
 ## Monte Carlo & prop firm check
 
@@ -499,7 +504,7 @@ cfg = ReportConfig(
     equity_timestamps=timestamps[results["entry_bar"]],
     equity_ylabel="Balance (1% risk)",
     summary=[
-        SummaryCell("Trades", str(len(results)), "総トレード数。"),
+        SummaryCell("Trades", str(results.n_filled), "約定したトレード数。"),
         SummaryCell("PF", f"{results.profit_factor:.2f}", "プロフィットファクター。"),
     ],
     strategy_html="<b>Entry:</b> RSI < 30 → Long ...",
@@ -533,7 +538,7 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 
 | Module | Default | How to override |
 |--------|---------|-----------------|
-| `BugGuard` | Data period estimation uses FX hours (22 days/mo, 17h/day) | Pass `start_ts`/`end_ts` to `check_data_period()` |
+| `BugGuard` | Without `timestamps`, the data period is estimated at FX hours (24 h × 22 days a month) | Pass `timestamps` to `bug_guard()` / `gate0_validate()` |
 | `BugGuard` | No cost registry: BG-02 is skipped (WARN) unless you pass `expected_costs` | `expected_costs=BrokerCost.tradeview_ilc().cost_prices()` |
 | `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40, MC pass >= 0.70 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
 | `BrokerCost` | `tradeview_ilc()`, `fundora()` presets | Use the constructor directly with your own spreads |
@@ -548,7 +553,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Stop gaps** — With `open_prices`, a stop that the market gaps through fills at the open (see [Fill rules](#fill-rules)).
 - **Cost underestimation** — BugGuard BG-02 compares the `spreads_used` you declare with `expected_costs` (pass both; it does not read `entry_costs`). Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
 - **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
-- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months of data, estimated from the bar count (see FX defaults). CSCV gives a formal PBO estimate.
+- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months of data, taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder converts a fixed UTC offset (`tz_offset_hours`, no daylight saving time).
 
 **NOT handled — your responsibility:**

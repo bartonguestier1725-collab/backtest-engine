@@ -13,6 +13,12 @@ from backtest_engine.audit import (
 )
 
 
+def _clean(rep) -> bool:
+    """Every test passed, apart from one the file has no function for
+    (reported as warn with details["not_run"])."""
+    return all(r["verdict"] == "pass" or r["details"].get("not_run") for r in rep["results"])
+
+
 def _rsi_sig(d):
     r = rsi(d["close"], 14)
     return np.where(r < 30, 1, np.where(r > 70, -1, 0))
@@ -360,7 +366,7 @@ def backtest(data):
             (tmp_path / name / "helpers.py").write_text(helper)
             (tmp_path / name / "strat.py").write_text(strat)
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
-        assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8))
 
     def test_helper_package_not_reused(self, tmp_path):
         leaky = "import numpy as np\ndef sig(c):\n    return np.sign(np.r_[c[1:], c[-1]] - c)\n"
@@ -371,7 +377,7 @@ def backtest(data):
             (tmp_path / name / "helperpkg").mkdir(parents=True)
             (tmp_path / name / "helperpkg" / "__init__.py").write_text(helper)
             (tmp_path / name / "strat.py").write_text(strat)
-        assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8))
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
 
     def test_namespace_helper_folder_not_reused(self, tmp_path):
@@ -384,7 +390,7 @@ def backtest(data):
             (tmp_path / name / "nshelp").mkdir(parents=True)
             (tmp_path / name / "nshelp" / "impl.py").write_text(helper)
             (tmp_path / name / "strat.py").write_text(strat)
-        assert audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(tmp_path / "a" / "strat.py", n_cuts=8))
         assert audit_strategy(tmp_path / "b" / "strat.py", n_cuts=8)["overall"] == "fail"
 
     def test_strategy_sys_path_edits_are_undone(self, tmp_path):
@@ -401,8 +407,9 @@ def backtest(data):
             (tmp_path / name / "lib" / "libhelper.py").write_text(helper)
             (tmp_path / name / "strat.py").write_text(strat)
         before = list(sys.path)
-        got = [audit_strategy(tmp_path / x / "strat.py", n_cuts=8)["overall"] for x in ("a", "b", "a", "b")]
-        assert got == ["pass", "fail", "pass", "fail"]
+        got = [audit_strategy(tmp_path / x / "strat.py", n_cuts=8) for x in ("a", "b", "a", "b")]
+        assert [_clean(r) for r in got] == [True, False, True, False]
+        assert [r["overall"] for r in got] == ["warn", "fail", "warn", "fail"]
         assert sys.path == before
 
     def test_data_folder_named_like_stdlib_module(self, tmp_path):
@@ -414,7 +421,7 @@ def backtest(data):
             "import json\nimport numpy as np\nfrom backtest_engine import rsi\n"
             "def signals(data):\n    json.dumps(1)\n    r = rsi(data['close'], 14)\n"
             "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
-        assert audit_strategy(tmp_path / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(tmp_path / "strat.py", n_cuts=8))
         assert sys.modules["json"] is stdlib_json
 
     def test_callers_module_is_restored(self, tmp_path, monkeypatch):
@@ -428,7 +435,7 @@ def backtest(data):
             "import numpy as np\nfrom backtest_engine import rsi\nimport config\n"
             "def signals(data):\n    r = rsi(data['close'], config.N)\n"
             "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
-        assert audit_strategy(tmp_path / "s" / "strat.py", n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(tmp_path / "s" / "strat.py", n_cuts=8))
         assert sys.modules["config"] is mine
 
     def test_dataclass_with_future_annotations_loads(self, tmp_path):
@@ -438,7 +445,33 @@ def backtest(data):
                      "@dataclass\nclass P:\n    n: int = 14\n\n"
                      "def signals(data):\n    r = rsi(data['close'], P().n)\n"
                      "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
-        assert audit_strategy(f, n_cuts=8)["overall"] == "pass"
+        assert _clean(audit_strategy(f, n_cuts=8))
+
+    def test_missing_backtest_is_warn_not_pass(self, tmp_path, capsys):
+        """signals() only: null_edge did not run, so the file must not pass."""
+        f = tmp_path / "sig_only.py"
+        f.write_text("import numpy as np\nfrom backtest_engine import rsi\n"
+                     "def signals(data):\n    r = rsi(data['close'], 14)\n"
+                     "    return np.where(r < 30, 1, np.where(r > 70, -1, 0))\n")
+        rep = audit_strategy(f, n_cuts=8)
+        by = {r["check"]: r for r in rep["results"]}
+        assert rep["overall"] == "warn"
+        assert by["lookahead"]["verdict"] == "pass"
+        assert by["null_edge"]["verdict"] == "warn" and by["null_edge"]["details"]["not_run"]
+        assert "NOT RUN" in by["null_edge"]["summary"] and "backtest(data)" in by["null_edge"]["summary"]
+        assert main([str(f)]) == 0  # warn exits 0
+        assert "NOT RUN" in capsys.readouterr().out
+
+    def test_missing_signals_is_warn_not_pass(self, tmp_path):
+        f = tmp_path / "bt_only.py"
+        f.write_text(self.CLEAN.replace("def signals(data):", "def _signals(data):")
+                     .replace("sig = signals(data)", "sig = _signals(data)"))
+        rep = audit_strategy(f, n_cuts=8, n_paths=10)
+        by = {r["check"]: r for r in rep["results"]}
+        assert rep["overall"] == "warn"
+        assert by["null_edge"]["verdict"] == "pass"
+        assert by["lookahead"]["verdict"] == "warn" and by["lookahead"]["details"]["not_run"]
+        assert "signals(data)" in by["lookahead"]["summary"]
 
     def test_load_error_is_error_exit_2(self, tmp_path, capsys):
         f = tmp_path / "broken.py"
@@ -553,7 +586,7 @@ class TestAuditStrategyIsolationEdges:
         f.write_text("from relhelper import sig\ndef signals(data):\n    return sig(data['close'])\n")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PYTHONPATH", "src")
-        assert audit_strategy(f, n_cuts=8, n_paths=10)["overall"] == "pass"
+        assert _clean(audit_strategy(f, n_cuts=8, n_paths=10))
 
     @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc (Linux)")
     def test_leftover_processes_are_stopped(self, tmp_path):

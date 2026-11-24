@@ -279,3 +279,57 @@ class TestTradeResultsMetrics:
         """All-losing strategy with 2+ losses returns negative sortino."""
         results = self._make_results([-1.0, -2.0, -3.0])
         assert results.sortino_r < 0
+
+
+class TestMetricsSkipNoFill:
+    """v0.6.1: NO_FILL rows (pnl_r = 0, never entered) are not trades."""
+
+    def _results(self):
+        from backtest_engine._types import TRADE_RESULT_DTYPE, EXIT_NO_FILL, EXIT_SL, EXIT_TP
+        from backtest_engine._results import TradeResults
+        data = np.zeros(6, dtype=TRADE_RESULT_DTYPE)
+        data["pnl_r"] = [2.0, -1.0, 0.0, 2.0, 0.0, -1.0]
+        data["exit_type"] = [EXIT_TP, EXIT_SL, EXIT_NO_FILL, EXIT_TP, EXIT_NO_FILL, EXIT_SL]
+        return TradeResults(data)
+
+    def test_rates_use_filled_trades(self):
+        r = self._results()
+        assert r.n_filled == 4 and len(r) == 6
+        assert r.win_rate == pytest.approx(0.5)
+        assert r.expectancy_r == pytest.approx(0.5)
+        filled = np.array([2.0, -1.0, 2.0, -1.0])
+        assert r.sharpe_r == pytest.approx(filled.mean() / filled.std(ddof=1))
+        assert r.geometric_mean_r == pytest.approx(
+            np.exp(np.mean(np.log(1 + 0.01 * filled))) - 1)
+
+    def test_totals_unchanged(self):
+        r = self._results()
+        assert r.profit_factor == pytest.approx(2.0)
+        assert r.max_drawdown_r == pytest.approx(1.0)
+        assert r.recovery_factor == pytest.approx(2.0)
+
+    def test_all_no_fill(self):
+        from backtest_engine._types import TRADE_RESULT_DTYPE, EXIT_NO_FILL
+        from backtest_engine._results import TradeResults
+        data = np.zeros(3, dtype=TRADE_RESULT_DTYPE)
+        data["exit_type"] = EXIT_NO_FILL
+        r = TradeResults(data)
+        assert (r.n_filled, r.win_rate, r.expectancy_r, r.sharpe_r, r.sortino_r) == (0, 0.0, 0.0, 0.0, 0.0)
+
+    def test_limit_entries_end_to_end(self):
+        from backtest_engine import simulate_trades, LONG, EXIT_NO_FILL
+        rng = np.random.default_rng(3)
+        n = 3000
+        c = 100 + np.cumsum(rng.normal(0, 0.1, n))
+        o = np.r_[c[0], c[:-1]]
+        h = np.maximum(o, c) + 0.1
+        l = np.minimum(o, c) - 0.1
+        sb = np.arange(10, n - 50, 25, dtype=np.int32)
+        res = simulate_trades(h, l, c, sb, np.full(len(sb), LONG, dtype=np.int8),
+                              np.full(len(sb), 0.5), np.full(len(sb), 3.0),
+                              max_hold=20, retrace_pct=0.06, retrace_timeout=2, preflight=False)
+        f = res[res["exit_type"] != EXIT_NO_FILL]
+        assert 0 < len(f) < len(res)
+        assert res.n_filled == len(f)
+        assert res.win_rate == pytest.approx(float(np.mean(f["pnl_r"] > 0)))
+        assert res.expectancy_r == pytest.approx(float(np.mean(f["pnl_r"])))

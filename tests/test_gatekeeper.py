@@ -76,7 +76,7 @@ class TestGate0:
 
         gk = GateKeeper(
             strategy_name="test",
-            n_bars=300_000,  # ~13 months of 1min FX data
+            n_bars=400_000,  # ~12.6 months of 1min FX data (528 1h bars/month)
             bar_minutes=1,
             resolution_minutes=1,
             spreads_used={"EURUSD": 0.00010},
@@ -84,12 +84,14 @@ class TestGate0:
             source_path=str(src),
         )
         trades, sl, close = _sim_trades()
-        ts = np.arange(len(close), dtype=np.int64) * 60
+        # 13 months of bar times (BG-06 reads the period from them)
+        ts = np.linspace(0, 13 * 30.44 * 86400, len(close)).astype(np.int64)
         result = gk.gate0_validate(trades=trades, sl_distances=sl,
                                    avg_price=float(np.median(close)), timestamps=ts)
         assert result.passed
         output = capsys.readouterr().out
         assert "INCOMPLETE" not in output
+        assert "from the first and last bar times" in output
 
     def test_gate0_log_counts_consistent(self, capsys):
         """BugGuard report and Gate 0 footer must show the same warning count."""
@@ -132,7 +134,7 @@ class TestGate0TradeChecks:
     12/14 never ran inside the pipeline."""
 
     def _gk(self, **kw):
-        return GateKeeper(strategy_name="t", n_bars=300_000, bar_minutes=1,
+        return GateKeeper(strategy_name="t", n_bars=400_000, bar_minutes=1,
                           resolution_minutes=1, **kw)
 
     def test_trade_checks_run(self, capsys):
@@ -146,7 +148,24 @@ class TestGate0TradeChecks:
 
     def test_missing_trades_is_reported(self, capsys):
         self._gk().gate0_validate()
-        assert "trades (BG-06b/08/09b/12 skipped)" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "trades (BG-06b/08/09b/12 skipped)" in out
+        assert "timestamps (BG-10 skipped; BG-06 estimated from n_bars)" in out
+
+    def test_gross_bg12_is_not_called_correct(self, capsys):
+        trades, sl, _ = _sim_trades()
+        self._gk().gate0_validate(trades=trades, sl_distances=sl)
+        out = capsys.readouterr().out
+        assert "No execution costs (GROSS)" in out and "(correct)" not in out
+
+    def test_timestamps_give_bg06_the_period(self):
+        """v0.6.1: Gate 0 used n_bars for BG-06 even when given the bar times."""
+        trades, sl, close = _sim_trades()
+        ts = 1609459200 + 3600 * np.arange(len(close), dtype=np.int64)  # ~7 months of 1h
+        gk = GateKeeper(strategy_name="t", n_bars=10_000_000, bar_minutes=60,
+                        resolution_minutes=60)
+        with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
+            gk.gate0_validate(trades=trades, timestamps=ts)
 
     def test_overlapping_1h_trades_warn_not_block(self, capsys):
         """Independent trades often overlap; that is not a same-bar re-entry

@@ -299,6 +299,26 @@ class TestCustomMode:
 # ── Validation Tests ─────────────────────────────────────────────────────────
 
 class TestValidation:
+    @pytest.mark.parametrize("mode,extra", [
+        ("trailing", {"trail_activation_r": 1.0, "trail_distance_r": 0.5}),
+        ("custom", {"exit_signals": np.zeros(100, dtype=bool)}),
+        ("sar_trailing", {"sar_values": np.full(100, 90.0)}),
+    ])
+    @pytest.mark.parametrize("opt", ["be_trigger_pct", "retrace_pct", "retrace_timeout"])
+    def test_rr_only_options_raise_in_other_modes(self, simple_uptrend, mode, extra, opt):
+        """v0.6.1: these were silently ignored outside exit_mode='rr'."""
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match=f"{opt} only work with exit_mode='rr'"):
+            _single_trade(high, low, close, LONG, 5.0, 10.0, 10,
+                          exit_mode=mode, **{opt: 0.5 if opt != "retrace_timeout" else 3}, **extra)
+
+    def test_rr_only_options_at_zero_are_fine(self, simple_uptrend):
+        high, low, close = simple_uptrend
+        r = _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="trailing",
+                          trail_activation_r=1.0, trail_distance_r=0.5,
+                          be_trigger_pct=0.0, retrace_pct=0.0, retrace_timeout=0)
+        assert len(r) == 1
+
     def test_mismatched_lengths_raises(self, simple_uptrend):
         high, low, close = simple_uptrend
         with pytest.raises(ValueError, match="equal length"):

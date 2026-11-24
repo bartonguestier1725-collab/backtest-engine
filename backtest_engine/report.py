@@ -4,7 +4,7 @@ White background, Courier New + Noto Sans JP, tooltip-enabled.
 Stdlib + matplotlib only — no Jinja2.
 
 When ``trades`` + ``trade_timestamps`` are provided, the following sections
-are auto-generated from TradeResults:
+are auto-generated from TradeResults (NO_FILL rows left out):
   - PnL Distribution (histogram)
   - Monthly Returns
   - Exit Breakdown
@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+
+from backtest_engine._types import EXIT_NO_FILL as _EXIT_NO_FILL
 
 
 def _ensure_mpl():
@@ -236,13 +238,13 @@ def _histogram_b64(pnl: np.ndarray) -> str:
 
 # ── auto-generated sections from TradeResults ──────────────────
 
-def _build_exit_breakdown(trades) -> str:
+def _build_exit_breakdown(trades, n_no_fill: int = 0) -> str:
     pnl = np.asarray(trades["pnl_r"])
     et = np.asarray(trades["exit_type"])
     hb = np.asarray(trades["hold_bars"])
     rows = []
     for code in sorted(set(int(x) for x in et)):
-        if code == 6:
+        if code == _EXIT_NO_FILL:
             continue
         mask = et == code
         cnt = int(np.sum(mask))
@@ -261,6 +263,11 @@ def _build_exit_breakdown(trades) -> str:
         f'保有期間 — 平均: {np.mean(hb):.1f} bars / '
         f'中央値: {np.median(hb):.0f} / 最大: {np.max(hb)}</div>'
     )
+    if n_no_fill:
+        hold_html += (
+            f'<div style="color:#666;font-size:11px;">'
+            f'約定しなかったシグナル {n_no_fill} 件は、この表と他の表から除いています。</div>'
+        )
     return (
         '<table><thead><tr><th>Exit</th><th>件数</th><th>割合</th>'
         '<th>平均PnL</th></tr></thead>'
@@ -447,19 +454,28 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         )
 
     # --- auto sections from TradeResults ---
+    trades = cfg.trades
     has_trades = (
-        cfg.trades is not None
-        and hasattr(cfg.trades, "__len__")
-        and len(cfg.trades) > 0
+        trades is not None
+        and hasattr(trades, "__len__")
+        and len(trades) > 0
     )
+    n_no_fill = 0
+    if has_trades and "exit_type" in (np.asarray(trades).dtype.names or ()):
+        # NO_FILL rows (pnl_r = 0, never entered) are not trades: keep them
+        # out of the histogram, the win rates and the exit shares.
+        filled = np.asarray(trades["exit_type"]) != _EXIT_NO_FILL
+        n_no_fill = int(np.sum(~filled))
+        trades = trades[filled]
+        has_trades = len(trades) > 0
     has_ts = cfg.trade_timestamps is not None
     if has_trades and has_ts:
-        max_eb = int(np.max(np.asarray(cfg.trades["entry_bar"])))
+        max_eb = int(np.max(np.asarray(trades["entry_bar"])))
         if max_eb >= len(cfg.trade_timestamps):
             has_ts = False
 
     if has_trades:
-        pnl = np.asarray(cfg.trades["pnl_r"])
+        pnl = np.asarray(trades["pnl_r"])
 
         if len(pnl) > 0:
             # PnL Distribution
@@ -473,21 +489,21 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         if has_ts and len(pnl) > 0:
             parts.append(
                 f'<h2>{_tip("エントリー月別 Returns", "エントリー月ごとのトレード数・損益・勝率。特定月だけ稼いでいる場合、環境依存の兆候。")}</h2>'
-                f'{_build_monthly(cfg.trades, cfg.trade_timestamps)}'
+                f'{_build_monthly(trades, cfg.trade_timestamps)}'
             )
 
         # Exit Breakdown
         if len(pnl) > 0:
             parts.append(
                 f'<h2>{_tip("Exit Breakdown", "決済理由の内訳。利確・損切・タイムアウトそれぞれの件数と平均損益。")}</h2>'
-                f'{_build_exit_breakdown(cfg.trades)}'
+                f'{_build_exit_breakdown(trades, n_no_fill)}'
             )
 
         # Yearly P&L (entry year)
         if has_ts and len(pnl) > 0:
             parts.append(
                 f'<h2>{_tip("エントリー年別損益", "年ごとのPnL安定性を確認。特定年だけ稼いでいる場合は再現性に疑問。")}</h2>'
-                f'{_build_yearly(cfg.trades, cfg.trade_timestamps)}'
+                f'{_build_yearly(trades, cfg.trade_timestamps)}'
             )
 
     # --- custom sections (before gates) ---

@@ -50,7 +50,7 @@ def main():
         equity_timestamps=equity_ts,
         equity_ylabel="Cumulative PnL (R)",
         summary=[
-            SummaryCell("Trades", str(len(results)), "Total trades."),
+            SummaryCell("Trades", str(results.n_filled), "Filled trades."),
             SummaryCell("Win Rate", f"{results.win_rate:.1%}", "Win rate.", "pos"),
             SummaryCell("PF", f"{results.profit_factor:.2f}", "Profit Factor."),
             SummaryCell("Expectancy", f"{results.expectancy_r:.3f}R", "Mean R/trade.",

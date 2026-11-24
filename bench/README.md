@@ -22,7 +22,7 @@ A check "catches" a case when its verdict is `fail` or `warn`.
 | Either audit check | **16** | **0** |
 | LLM reading the strategy file (Claude Code `--model sonnet`, `run_llm.sh`; the model version was not recorded) | 15 | 1 |
 
-s24 and s25 define only `backtest()`, so `lookahead` does not run on them: it caught 12 of the 15 leaky cases it ran on, with no false alarm on 11 clean ones.
+s24 and s25 define only `backtest()`, so `lookahead` does not run on them (since v0.6.1 the audit reports that as a `warn` with `not_run`, which is not counted as a catch): it caught 12 of the 15 leaky cases it ran on, with no false alarm on 11 clean ones.
 
 What each check missed, and why:
 

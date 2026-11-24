@@ -104,7 +104,7 @@ def main():
     # 8. Analyze results using TradeResults convenience metrics
     pnl = results["pnl_r"]
     print(f"\n--- Trade Results (net of costs) ---")
-    print(f"Total trades: {len(pnl)}")
+    print(f"Total trades: {results.n_filled}")
     print(f"Profit Factor: {results.profit_factor:.2f}")
     print(f"Win rate: {results.win_rate:.1%}")
     print(f"Expectancy: {results.expectancy_r:.3f}R")
@@ -118,7 +118,7 @@ def main():
     for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout"), (EXIT_BE, "BE")]:
         count = np.sum(results["exit_type"] == exit_type)
         if count > 0:
-            print(f"  {name}: {count} ({count/len(pnl)*100:.0f}%)")
+            print(f"  {name}: {count} ({count/results.n_filled*100:.0f}%)")
 
     # 9. Monte Carlo analysis
     mc = MonteCarloDD(pnl, n_sims=10000, risk_pct=0.01, seed=42)

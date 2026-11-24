@@ -10,7 +10,9 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 
 1. **HTMLレポート生成**: 「HTMLレポートも生成しますか？PnL分布・月次損益・Exit内訳・年別損益が自動で入ります」
 2. **先読みの検査（audit）**: 結果を報告する前に、戦略を `signals(data)` と `backtest(data)` の2関数のファイルにして `uv run python -m backtest_engine.audit 戦略.py --json` を回す（詳しくは下の「戦略の検証」）。fail なら PF や勝率を結果として報告しない
-3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)`。ts はシグナルを作った時間足の全部の足の時刻（`ts[signal_bars]` ではない。hires でも1時間足の ts）。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・前の取引の決済足でのエントリー・SLなし・始値エントリー・固定コストの検査が回る。GK-00 の中の spreads_used の項目は GROSS なら気にしなくてよい（他の項目は埋める）。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）。Gate 1〜4 は不合格でも止まらないので `.passed` を見る（回し方は `examples/gatekeeper_pipeline.py`）
+3. **GateKeeper検証**: まだ通していない場合「GateKeeper（過学習検出パイプライン）も通しますか？」。Gate 0 には結果を渡す（`GateKeeper(..., bar_minutes=60, resolution_minutes=約定を判定した足の分数)` と `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)`。ts はシグナルを作った時間足の全部の足の時刻（`ts[signal_bars]` ではない。hires でも1時間足の ts）。1時間足の simulate_trades なら resolution_minutes=60、hires なら 1）。渡すと取引数・前の取引の決済足でのエントリー・SLなし・始値エントリー・固定コストの検査が回り、データ期間（BG-06）は ts の最初と最後の時刻で測る。GK-00 の中の spreads_used の項目は GROSS なら気にしなくてよい（他の項目は埋める）。Gate 0 はシグナルのコードの中の先読みは調べない（それは audit）。Gate 1〜4 は不合格でも止まらないので `.passed` を見る（回し方は `examples/gatekeeper_pipeline.py`）
+   - Gate 1・2: run_func が返す `n_trades` は `results.n_filled`（`len(results)` は約定しなかった行も数える）
+   - Gate 3: WalkForward・CSCV に渡す evaluate_fn は、窓の中の本当の値（合計 R など）を返し、取引が無い窓は 0。-999 のような目印は使わない（WFA の平均と CSCV の順位がゆがむ）
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
@@ -103,6 +105,8 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 - open_prices を渡さないときは、損切り値・終値で約定する（窓開けは分からない）
 - 利確は利確値で約定する（窓を開けても有利な値にしない）
 - 指値エントリー（`retrace_pct`）のSL/TPは約定値から測る
+- `retrace_pct`・`retrace_timeout`・`be_trigger_pct` は exit_mode="rr" だけ。他のモードで0以外を渡すとエラー（v0.6.1。それまでは黙って無視していた）
+- 約定しなかった行（NO_FILL）は、勝率・期待値・Sharpe・Sortino に数えない（v0.6.1）。取引数は `results.n_filled`
 - max_hold は保有する本数。始値エントリーはエントリーの足が1本目
 
 ### 戦略の検証（audit）
@@ -115,6 +119,7 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 - 損益からコストを手で引いている場合、null_edge はそれも損失として数える（entry_costs で渡したコストだけを戻して検定する）
 - fail の結果は報告しない。原因を直して回し直す。error は検査ができていない（合格ではない）。pass でも「先読みが無いことの証明ではない」と添える
 - 終了コードは fail が1、error が2、pass と warn は0。判定は JSON の `overall` と各 `verdict` を読む
+- signals と backtest の片方しか無いファイルは、無い方の検査が warn になる（details に `not_run`、summary に何を調べていないか）。両方書いて回し直す
 - backtest の中ではエンジンの simulate_trades / simulate_trades_hires を使う（硬貨投げの版は、そこで向きだけを入れ替えて作る）
 - 戦略ファイルの雛形（data の中身、signals の戻り値、1分足で回すときの `BAR_MINUTES`・`NULL_BARS`・`NULL_VOL`）と英語の手順は `AGENTS.md`（Claude 以外の AI も読む）。API の呼び方は README の Quick start と各節
 

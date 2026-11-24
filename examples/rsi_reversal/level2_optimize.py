@@ -106,7 +106,7 @@ for i, combo in enumerate(combos):
 
     results_list.append({
         **params,
-        "n_trades": len(pnl),
+        "n_trades": res.n_filled,
         "pf": pf,
         "win_rate": wr,
         "expectancy_r": exp,

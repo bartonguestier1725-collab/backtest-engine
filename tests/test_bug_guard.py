@@ -469,3 +469,52 @@ class TestDataPeriodInputs:
         r = check_data_period(100, 60, start_ts=1609459200,
                               end_ts=pd.Timestamp("2024-01-01", tz="UTC"))
         assert r.passed and "36.0 months" in r.message
+
+
+class TestDataPeriodFromTimestamps:
+    """v0.6.1: run_all_checks/GateKeeper take BG-06's period from the bar
+    times; without them the estimate is 24h × 22 days (528 1h bars a month)."""
+
+    def _bg06(self, **kw):
+        rep = run_all_checks(resolution_minutes=1, strict=False, _suppress_print=True, **kw)
+        return [r for r in rep.results if r.check_id == "BG-06"]
+
+    def test_estimate_is_528_bars_a_month(self):
+        from backtest_engine.bug_guard import check_data_period
+        assert "12.0 months" in check_data_period(528 * 12, 60).message
+        assert check_data_period(528 * 12, 60).passed
+        # 8.7 months of real FX 1h bars (~519/month) passed the old 374/month
+        # estimate as 12.1 months
+        assert not check_data_period(4520, 60).passed
+
+    def test_timestamps_override_bar_count(self):
+        ts = 1609459200 + 3600 * np.arange(6 * 520, dtype=np.int64)  # ~4.3 months
+        (r,) = self._bg06(n_bars=10_000_000, bar_minutes=60, timestamps=ts)
+        assert not r.passed and "first and last bar times" in r.message
+
+    def test_timestamps_alone_run_bg06(self):
+        ts = np.linspace(1609459200, 1609459200 + 400 * 86400, 1000).astype(np.int64)
+        (r,) = self._bg06(timestamps=ts)
+        assert r.passed and "13.1 months" in r.message
+
+    def test_millisecond_timestamps_are_an_error(self):
+        ts = (1609459200 + 3600 * np.arange(100, dtype=np.int64)) * 1000
+        (r,) = self._bg06(timestamps=ts)
+        assert not r.passed and r.severity == "ERROR" and "BAD TIMESTAMPS" in r.message
+
+    def test_no_bars_no_timestamps_skips(self):
+        assert self._bg06() == []
+
+
+class TestFixedCostMessages:
+    def test_gross_is_not_called_correct(self):
+        r = check_fixed_cost_usage(np.array([1.0, 2.0]), cost_is_fixed=False, has_costs=False)
+        assert r.passed and "GROSS" in r.message and "correct" not in r.message
+
+    def test_unknown_costs_are_not_called_correct(self):
+        r = check_fixed_cost_usage(np.array([1.0, 2.0]))
+        assert r.passed and "not checked" in r.message and "correct" not in r.message
+
+    def test_per_trade_costs(self):
+        r = check_fixed_cost_usage(np.array([1.0, 2.0]), cost_is_fixed=False, has_costs=True)
+        assert r.passed and "per-trade" in r.message

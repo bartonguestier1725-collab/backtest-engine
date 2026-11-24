@@ -90,7 +90,7 @@ def run_func(params):
     return {
         "pf": results.profit_factor,
         "total_r": float(np.sum(results["pnl_r"])),
-        "n_trades": len(results),
+        "n_trades": results.n_filled,  # len(results) also counts NO_FILL rows
         "max_dd_r": results.max_drawdown_r,
     }
 
@@ -102,8 +102,8 @@ def main():
     gk = GateKeeper(
         strategy_name="SMA Crossover Demo",
         n_bars=len(CLOSE),
-        bar_minutes=1,
-        resolution_minutes=1,
+        bar_minutes=5,           # the synthetic bars stand for 5m bars
+        resolution_minutes=5,
         spreads_used=COST_MODEL.cost_prices(),
         expected_costs=COST_MODEL.cost_prices(),
         source_path=__file__,
@@ -123,7 +123,9 @@ def main():
         HIGH, LOW, CLOSE, sig, dirs, sl, sl * 2.0, max_hold=100, open_prices=OPEN,
         entry_costs=COST_MODEL.per_trade_cost(["EURUSD"] * len(sig), sl), preflight=False,
     )
-    bar_times = 1704067200 + 60 * np.arange(len(CLOSE))  # synthetic 1m bar times
+    # Bar times of the synthetic 5m bars: 300,000 bars = 2.9 years. BG-06 takes
+    # the data period from them (as 1m bars this would be 7 months: too short).
+    bar_times = 1577836800 + 300 * np.arange(len(CLOSE))
     gk.gate0_validate(trades=baseline, sl_distances=sl, avg_price=float(np.median(CLOSE)),
                       timestamps=bar_times)
 

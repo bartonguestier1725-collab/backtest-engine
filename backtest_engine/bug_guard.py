@@ -288,8 +288,11 @@ def check_data_period(
 
     If start_ts/end_ts are provided (Unix seconds like the rest of the
     library, pd.Timestamp, datetime64 or datetime), uses calendar period.
-    Otherwise estimates from bar count assuming FX market hours (~17h/day,
-    ~22 days/month ≈ 374 bars/month for 1h).
+    Otherwise estimates from bar count assuming FX market hours (24h/day,
+    22 trading days/month = 528 bars/month for 1h). FX trades about 21.7
+    days a month, so the estimate errs short (5 years of AggVault EURUSD 1h
+    reads as 59 months); markets with fewer hours read much shorter, so pass
+    the dates for them.
     """
     if start_ts is not None and end_ts is not None:
         import pandas as pd
@@ -311,18 +314,21 @@ def check_data_period(
 
         delta = _ts(end_ts) - _ts(start_ts)
         total_months = delta.days / 30.44
+        basis = "from the first and last bar times"
     else:
-        # FX: ~22 trading days/month × ~17 hours/day = ~374 1h-bars/month
-        bars_per_month = (22 * 17 * 60) / bar_minutes
+        # FX: 22 trading days/month × 24 hours/day = 528 1h-bars/month
+        bars_per_month = (22 * 24 * 60) / bar_minutes
         total_months = n_bars / bars_per_month if bars_per_month > 0 else 0
+        basis = f"estimated from {n_bars} bars × {bar_minutes}min at FX hours"
 
     if total_months < min_months:
         return CheckResult(
             "BG-06", False,
-            f"SHORT PERIOD: {total_months:.1f} months ({n_bars} bars × {bar_minutes}min). "
+            f"SHORT PERIOD: {total_months:.1f} months ({basis}). "
             f"Minimum {min_months} months required. Results will be overfitted.",
         )
-    return CheckResult("BG-06", True, f"Data period: {total_months:.1f} months (>={min_months})")
+    return CheckResult("BG-06", True,
+                       f"Data period: {total_months:.1f} months (>={min_months}, {basis})")
 
 
 def check_expanding_quantile(source_path: str | Path) -> CheckResult:
@@ -452,6 +458,7 @@ def check_open_prices_provided(open_prices_provided: bool) -> CheckResult:
 def check_fixed_cost_usage(
     sl_distances: np.ndarray,
     cost_is_fixed: bool = False,
+    has_costs: Optional[bool] = None,
 ) -> CheckResult:
     """BG-12: Warn if fixed cost is used with varying SL distances.
 
@@ -462,12 +469,18 @@ def check_fixed_cost_usage(
     ----------
     sl_distances : SL distances for all trades.
     cost_is_fixed : True if caller used scalar as_r() instead of per-trade cost.
+    has_costs : True if any trade has a cost, False if none (GROSS), None if
+                unknown. GateKeeper's Gate 0 reads both from ``cost_r``.
     """
-    if not cost_is_fixed:
-        return CheckResult("BG-12", True, "Per-trade cost used (correct)")
-
+    if has_costs is False:
+        return CheckResult("BG-12", True, "No execution costs (GROSS): no fixed cost to check")
     if len(sl_distances) < 2:
         return CheckResult("BG-12", True, "Too few trades to check cost variation")
+    if not cost_is_fixed:
+        if has_costs:
+            return CheckResult("BG-12", True, "Cost differs between trades (per-trade cost)")
+        return CheckResult("BG-12", True,
+                           "Not reported as a fixed cost (cost_is_fixed=False); not checked")
 
     cv = np.std(sl_distances) / np.mean(sl_distances) if np.mean(sl_distances) > 0 else 0.0
     if cv > 0.10:
@@ -643,6 +656,7 @@ def run_all_checks(
     open_prices_provided: Optional[bool] = None,
     sl_distances: Optional[np.ndarray] = None,
     cost_is_fixed: bool = False,
+    has_costs: Optional[bool] = None,
     signal_spreads: Optional[np.ndarray] = None,
     max_spread: float = 0.0,
     avg_price: float = 0.0,
@@ -664,7 +678,8 @@ def run_all_checks(
                      Use BrokerCost.cost_prices() to generate this.
                      If None, cost check is skipped.
     resolution_minutes : Bar size used for SL/TP simulation.
-    n_bars : Number of bars in the dataset.
+    n_bars : Number of bars in the dataset (BG-06 estimates the period from
+             it when ``timestamps`` is not given).
     bar_minutes : Size of each bar in minutes.
     n_trades : Total number of trades.
     min_months : Minimum data period in months.
@@ -672,11 +687,15 @@ def run_all_checks(
     open_prices_provided : True if open_prices was passed to simulate_trades().
     sl_distances : SL distances for all trades (for BG-12 fixed-cost check).
     cost_is_fixed : True if scalar cost was used instead of per-trade cost.
+    has_costs : False if the trades carry no execution cost (GROSS), True if
+                they do, None if unknown (BG-12 message only).
     signal_spreads : Spread at signal time for each trade (for BG-13).
     max_spread : Maximum spread allowed in price units (for BG-13). 0 = no check.
     avg_price : Representative price level for BG-14 no-SL detection
                 (e.g. median of close). 0 = skip check.
-    timestamps : Bar open times of the data (for BG-10). None = skip.
+    timestamps : Bar open times of the data, Unix seconds (for BG-10, and
+                 BG-06 uses the first and last as the calendar period).
+                 None = skip BG-10.
     strict : If True, assert_passed() is called (raises on ERROR).
     """
     # Backward compat: accept deprecated broker kwarg
@@ -713,7 +732,17 @@ def run_all_checks(
 
     # Data quality checks
     report.results.append(check_resolution(resolution_minutes))
-    if n_bars > 0:
+    ts_span = timestamps is not None and len(timestamps) >= 2
+    if ts_span:
+        # The bar times give the calendar period; the bar count only estimates it.
+        t = np.asarray(timestamps)
+        try:
+            r = check_data_period(n_bars or len(t), bar_minutes, min_months,
+                                  start_ts=t.min(), end_ts=t.max())
+        except ValueError as e:  # milliseconds, nanoseconds, NaT
+            r = CheckResult("BG-06", False, f"BAD TIMESTAMPS: {e}")
+        report.results.append(r)
+    elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))
     if n_trades > 0:
         report.results.append(check_min_trades(n_trades, min_trades))
@@ -726,7 +755,7 @@ def run_all_checks(
 
     # BG-12: Fixed cost with varying SL
     if sl_distances is not None:
-        report.results.append(check_fixed_cost_usage(sl_distances, cost_is_fixed))
+        report.results.append(check_fixed_cost_usage(sl_distances, cost_is_fixed, has_costs))
 
     # BG-13: Spread filter violations
     if signal_spreads is not None or max_spread > 0.0:

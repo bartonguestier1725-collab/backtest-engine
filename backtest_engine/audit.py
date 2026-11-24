@@ -594,6 +594,21 @@ def _audit_in_process(path: Path, data, n_cuts: int, n_paths: int, seed: int,
                 if not has_sig and not has_bt:
                     results.append(AuditResult("strategy_file", "error",
                                                "Define signals(data) and/or backtest(data) in the file."))
+                elif not has_sig:
+                    results.append(AuditResult(
+                        "lookahead", "warn",
+                        "NOT RUN: the file has no signals(data), so the look-ahead test "
+                        "(re-run the signals with later bars rewritten) did not run. "
+                        "Add signals(data) returning the signal per bar (AGENTS.md).",
+                        {"not_run": True}))
+                elif not has_bt:
+                    results.append(AuditResult(
+                        "null_edge", "warn",
+                        "NOT RUN: the file has no backtest(data), so the random-data "
+                        "test did not run: it is what finds look-ahead inside backtest() "
+                        "or library code and entry-time shifts, which lookahead cannot "
+                        "see. Add backtest(data) returning the per-trade results "
+                        "(AGENTS.md).", {"not_run": True}))
             except Exception as e:
                 results.append(AuditResult(
                     "audit", "error", f"the audit failed: {type(e).__name__}: {e}",
@@ -621,6 +636,8 @@ def audit_strategy(path: str | Path, data=None, n_cuts: int = 32, n_paths: int =
 
     The file defines ``signals(data)`` (for the look-ahead test) and/or
     ``backtest(data)`` (for the null-data test, with the coin-flip placebo).
+    If one of them is missing, its test is reported as ``warn`` with
+    ``details["not_run"]`` and a summary saying what was not tested.
     Optional module constants: ``BAR_MINUTES`` (bar size of ``data``,
     default 60), ``NULL_VOL`` (per-bar volatility of the random walk relative
     to price, default 0.002) and ``NULL_BARS`` (bars per random walk and for

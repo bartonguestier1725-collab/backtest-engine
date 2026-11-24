@@ -22,7 +22,7 @@ from backtest_engine.core import DataQualityWarning
 
 __all__ = ["fetch_aggvault"]
 
-_USER_AGENT = "backtest-engine/0.6.0"
+_USER_AGENT = "backtest-engine/0.6.1"
 
 
 def _iso_to_epoch(date_str: str, label: str) -> int:

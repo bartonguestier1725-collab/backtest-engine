@@ -1,12 +1,12 @@
 """GateKeeper — Fast-kill system for trading strategy evaluation.
 
-Kill bad strategies in 5 minutes, not 7 hours.
+Kill bad strategies with cheap tests before running the expensive ones.
 
-Gate 0: Data validation (1 min)    — Do we have enough data? Correct costs?
-Gate 1: Quick feasibility (5 min)  — Run ~20 combos on full data. Best PF < 1.05 → dead.
-Gate 2: Coarse screen (20 min)     — Run ~100 combos. No combo with PF >= 1.10 AND RF >= 1.5 → dead.
-Gate 3: WFA + CSCV (30 min)        — PBO > 0.40 or WFA OOS positive splits < 0.55 → dead.
-Gate 4: Monte Carlo (5 min)        — MC pass rate < 0.70 or DD@confidence > dd_limit → dead.
+Gate 0: Data validation    — Do we have enough data? Correct costs?
+Gate 1: Quick feasibility  — Run ~20 combos on full data. Best PF < 1.05 → dead.
+Gate 2: Coarse screen      — Run ~100 combos. No combo with PF >= 1.10 AND RF >= 1.5 → dead.
+Gate 3: WFA + CSCV         — PBO > 0.40 or WFA OOS positive splits < 0.55 → dead.
+Gate 4: Monte Carlo        — MC pass rate < 0.70 or DD@confidence > dd_limit → dead.
 
 Default thresholds are tuned for FX. Override them via class variables
 (e.g. ``gk.GATE1_MIN_PF = 1.10``) for other asset classes.
@@ -26,9 +26,11 @@ Usage:
     # Gate 0: auto-runs BugGuard. Pass the simulation result so the
     # trade-level checks (trade count, entry on the previous exit bar, no-SL,
     # open-price entry, fixed cost) run too.
-    gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)))
+    gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)),
+                      timestamps=ts)
 
     # Gate 1: provide a function that takes param_dict → metric_dict
+    # (n_trades = results.n_filled)
     gk.gate1_quick(run_func, quick_params)
 
     # Gate 2: expanded grid
@@ -72,8 +74,9 @@ class GateKeeper:
     Parameters
     ----------
     strategy_name : Human-readable name for logging.
-    n_bars : Total bars in dataset.
-    bar_minutes : Bar size in minutes (for data period check).
+    n_bars : Total bars in dataset. BG-06 estimates the period from it at FX
+             hours when Gate 0 gets no ``timestamps``.
+    bar_minutes : Bar size in minutes (for the data period estimate and BG-10).
     resolution_minutes : Bar size (minutes) the SL/TP fills were simulated on
                          (1 for simulate_trades_hires on 1m bars). If None,
                          it is assumed equal to ``bar_minutes`` and GK-00 warns.
@@ -166,8 +169,10 @@ class GateKeeper:
         sl_distances : SL distances passed to the simulation (same length as
                        ``trades``). Enables BG-12 and BG-14.
         avg_price : Representative price (e.g. median close). Enables BG-14.
-        timestamps : Bar open timestamps of the data. Enables BG-10
-                     (last bar still forming).
+        timestamps : Bar open timestamps (Unix seconds) of every bar of the
+                     signal timeframe. Enables BG-10 (last bar still forming)
+                     and gives BG-06 the calendar period (first to last bar)
+                     instead of the estimate from ``n_bars``.
         """
         self._header("Gate 0", "Data Validation + BugGuard")
         t0 = time.time()
@@ -182,8 +187,8 @@ class GateKeeper:
             missing.append("source_path (BG-04/07/09 skipped)")
         if self.spreads_used is None:
             missing.append("spreads_used (BG-02 skipped)")
-        if self.n_bars == 0:
-            missing.append("n_bars (BG-06 skipped)")
+        if self.n_bars == 0 and timestamps is None:
+            missing.append("n_bars or timestamps (BG-06 skipped)")
         if not self.resolution_declared:
             missing.append(
                 f"resolution_minutes (BG-05 assumes {self.resolution_minutes}min = bar_minutes)"
@@ -193,7 +198,8 @@ class GateKeeper:
         if sl_distances is None or avg_price <= 0:
             missing.append("sl_distances + avg_price (BG-14 skipped)")
         if timestamps is None:
-            missing.append("timestamps (BG-10 skipped)")
+            missing.append("timestamps (BG-10 skipped"
+                           + ("; BG-06 estimated from n_bars)" if self.n_bars else ")"))
 
         trade_kwargs: dict[str, Any] = {}
         n_filled = 0
@@ -226,6 +232,7 @@ class GateKeeper:
                 sl_f = sl[filled][order]
                 trade_kwargs["sl_distances"] = sl_f
                 cost = f["cost_r"]
+                trade_kwargs["has_costs"] = bool(np.any(cost != 0))
                 trade_kwargs["cost_is_fixed"] = bool(
                     len(cost) > 1 and np.any(cost != 0) and np.ptp(cost) == 0
                 )
@@ -311,7 +318,9 @@ class GateKeeper:
         """Gate 1: Quick feasibility — run a small set of params on full data.
 
         run_func: Takes a param dict, returns a metric dict with at least
-                  'pf', 'total_r', 'n_trades', 'max_dd_r'.
+                  'pf', 'total_r', 'n_trades', 'max_dd_r'. Use
+                  ``results.n_filled`` for 'n_trades' (``len(results)`` also
+                  counts NO_FILL rows).
                   Returns None if no trades.
         param_list: ~10-20 diverse parameter combos to test.
         """
