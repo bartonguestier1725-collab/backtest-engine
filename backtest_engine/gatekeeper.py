@@ -16,7 +16,7 @@ Usage:
 
     gk = GateKeeper(
         strategy_name="Currency Strength v6",
-        n_bars=7022,
+        n_bars=len(close),     # bars of the signal timeframe
         bar_minutes=60,
         resolution_minutes=1,
         spreads_used=SPREADS,
@@ -74,8 +74,10 @@ class GateKeeper:
     Parameters
     ----------
     strategy_name : Human-readable name for logging.
-    n_bars : Total bars in dataset. BG-06 estimates the period from it at FX
-             hours when Gate 0 gets no ``timestamps``.
+    n_bars : Bars of the signal timeframe (the same bars as Gate 0's
+             ``timestamps``; the 1h bars also for simulate_trades_hires).
+             BG-06 estimates the period from it at FX hours when Gate 0 gets
+             no ``timestamps``.
     bar_minutes : Bar size in minutes (for the data period estimate and BG-10).
     resolution_minutes : Bar size (minutes) the SL/TP fills were simulated on
                          (1 for simulate_trades_hires on 1m bars). If None,
@@ -197,7 +199,7 @@ class GateKeeper:
             missing.append("trades (BG-06b/08/09b/12 skipped)")
         if sl_distances is None or avg_price <= 0:
             missing.append("sl_distances + avg_price (BG-14 skipped)")
-        if timestamps is None:
+        if timestamps is None or len(timestamps) < 2:
             missing.append("timestamps (BG-10 skipped"
                            + ("; BG-06 estimated from n_bars)" if self.n_bars else ")"))
 

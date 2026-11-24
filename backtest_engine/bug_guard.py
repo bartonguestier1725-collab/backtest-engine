@@ -735,17 +735,26 @@ def run_all_checks(
     if ts_span:
         # The bar times give the calendar period; the bar count only estimates it.
         t = np.asarray(timestamps)
+        bad = False
         try:
             r = check_data_period(n_bars or len(t), bar_minutes, min_months,
                                   start_ts=t.min(), end_ts=t.max())
         except (ValueError, TypeError) as e:  # ms/ns, NaN/NaT, naive mixed with aware
             r = CheckResult("BG-06", False, f"BAD TIMESTAMPS: {e}")
-        if n_bars and n_bars != len(t):
-            # e.g. close sliced to a short window but the full ts passed
-            note = (f" n_bars={n_bars} but {len(t)} timestamps: BG-06 used the "
-                    f"timestamps; pass the times of the bars you tested.")
-            r = (CheckResult("BG-06", False, r.message + note, severity="WARN")
-                 if r.passed else CheckResult("BG-06", False, r.message + note))
+            bad = True
+        if not bad and n_bars and n_bars < len(t):
+            # Fewer bars than bar times, e.g. close sliced to a short window
+            # but the full ts passed: the estimate from n_bars must pass too.
+            est = check_data_period(n_bars, bar_minutes, min_months)
+            note = (f" n_bars={n_bars} is fewer than the {len(t)} timestamps, so BG-06 "
+                    f"also checked the period estimated from n_bars; n_bars and "
+                    f"timestamps should count the same signal-timeframe bars.")
+            if r.passed and est.passed:
+                r = CheckResult("BG-06", False, r.message + note, severity="WARN")
+            elif r.passed:
+                r = CheckResult("BG-06", False, est.message + note)
+            else:
+                r = CheckResult("BG-06", False, r.message + note)
         report.results.append(r)
     elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))

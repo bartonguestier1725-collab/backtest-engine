@@ -992,7 +992,9 @@ def simulate_trades(
             raise ValueError("sl_distances must be > 0 (used as divisor for R-multiples)")
     if max_hold < 1:
         raise ValueError("max_hold must be >= 1 (bars a trade may be held)")
-    if exit_mode in ("trailing", "custom", "sar_trailing"):
+    if exit_mode not in ("rr", "trailing", "custom", "sar_trailing"):
+        raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', 'sar_trailing', or 'custom'.")
+    if exit_mode != "rr":
         # Only the rr kernel reads these; other modes would ignore them and
         # silently return market entries without breakeven.
         rr_only = [name for name, v in (("be_trigger_pct", be_trigger_pct),

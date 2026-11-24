@@ -172,6 +172,9 @@ class TestGate0TradeChecks:
     def test_empty_timestamps_reported(self, capsys):
         GateKeeper(strategy_name="t", bar_minutes=60).gate0_validate(timestamps=np.array([]))
         assert "n_bars or timestamps (BG-06 skipped)" in capsys.readouterr().out
+        GateKeeper(strategy_name="t", n_bars=10_000, bar_minutes=60).gate0_validate(
+            timestamps=np.array([0]))
+        assert "BG-06 estimated from n_bars" in capsys.readouterr().out
 
     def test_overlapping_1h_trades_warn_not_block(self, capsys):
         """Independent trades often overlap; that is not a same-bar re-entry

@@ -505,11 +505,27 @@ class TestDataPeriodFromTimestamps:
     def test_no_bars_no_timestamps_skips(self):
         assert self._bg06() == []
 
-    def test_bar_count_mismatch_warns(self):
+    def test_sliced_close_with_full_ts_fails(self):
         """A sliced close with the full ts would pass on the ts span alone."""
         ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)  # 10 years
         (r,) = self._bg06(n_bars=1500, bar_minutes=60, timestamps=ts)
-        assert not r.passed and r.severity == "WARN" and "n_bars=1500" in r.message
+        assert not r.passed and r.severity == "ERROR"
+        assert "SHORT PERIOD" in r.message and "n_bars=1500 is fewer" in r.message
+
+    def test_fewer_bars_but_both_long_enough_warns(self):
+        ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)
+        (r,) = self._bg06(n_bars=8 * 8760, bar_minutes=60, timestamps=ts)
+        assert not r.passed and r.severity == "WARN"
+
+    def test_more_bars_than_timestamps_uses_timestamps(self):
+        """hires: n_bars counted on 1m bars, ts of the 1h signal bars."""
+        ts = 1609459200 + 3600 * np.arange(6 * 520, dtype=np.int64)  # ~4.3 months
+        (r,) = self._bg06(n_bars=60 * len(ts), bar_minutes=60, timestamps=ts)
+        assert not r.passed and "first and last bar times" in r.message
+        assert "fewer than" not in r.message
+        ts = 1609459200 + 3600 * np.arange(15 * 730, dtype=np.int64)  # ~15 months
+        (r,) = self._bg06(n_bars=60 * len(ts), bar_minutes=60, timestamps=ts)
+        assert r.passed
 
     def test_nan_and_mixed_timezones_are_bg06_errors(self):
         from backtest_engine.bug_guard import check_data_period

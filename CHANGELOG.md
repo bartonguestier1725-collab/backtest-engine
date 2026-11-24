@@ -15,17 +15,19 @@ change. Some metrics and checks do (first section).
   GateKeeper `run_func` (`len(results)` counts the `NO_FILL` rows too, and
   Gates 1–2 compare it with their minimum trade counts). New
   `results.filled` drops the `NO_FILL` rows; the README and examples pass
-  `results.filled["pnl_r"]` to `MonteCarloDD` and `StressTest` (for the
-  shuffled max DD this changes nothing; Kelly's win rate and StressTest's
-  `cost_add_r` no longer count orders that never filled). The HTML report
+  `results.filled["pnl_r"]` to `MonteCarloDD` and `StressTest` (the
+  shuffled max DD has the same distribution, but numbers at a fixed seed
+  change; Kelly's win rate, the block bootstrap, `degrade(win_rate_delta=)`
+  and `cost_add_r` no longer count orders that never filled). The HTML report
   leaves `NO_FILL` rows out of the histogram, the monthly and yearly tables
   and the exit shares, and says how many it left out.
 - **BG-06 uses the bar times.** `bug_guard(timestamps=)` and
   `gk.gate0_validate(timestamps=)` ignored them for the data period and
   estimated it from the bar count. They now measure the first to the last bar
   time; timestamps in milliseconds or nanoseconds are a BG-06 ERROR (and
-  BG-10 reports non-integer times instead of raising), and a bar count that
-  differs from the number of timestamps is a WARN. Without
+  BG-10 reports times that are not numbers instead of raising). With
+  fewer `n_bars` than timestamps (a sliced `close` with the full `ts`), the
+  estimate from `n_bars` must pass too, and a pass is a WARN. Without
   timestamps the estimate is 24 h × 22 days a month (528 1h bars), not
   17 h × 22 days (374): FX trades about 21.7 days of 24 h, so the old
   estimate read 8.7 months of AggVault EURUSD 1h as 12.1 months and passed
@@ -38,7 +40,8 @@ change. Some metrics and checks do (first section).
   `exit_mode="trailing"`, `"custom"` or `"sar_trailing"` raises `ValueError`
   (it entered at market without breakeven). Also through
   `simulate_trades_hires`. Other mode-specific options are still ignored
-  outside their mode (e.g. `trail_activation_r` with `"rr"`).
+  outside their mode (e.g. `trail_activation_r` with `"rr"`). An unknown
+  `exit_mode` now raises also when there are no signals.
 - **The audit no longer passes a file it tested only half of.** A file with
   only `signals()` or only `backtest()` gets a `warn` for the missing test
   (`details["not_run"]`, and a summary of what was not tested) instead of an

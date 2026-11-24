@@ -318,6 +318,13 @@ class TestValidation:
             _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="RR",
                           be_trigger_pct=0.5)
 
+    def test_unknown_mode_without_signals_raises(self, simple_uptrend):
+        high, low, close = simple_uptrend
+        e = np.array([], dtype=np.int32)
+        with pytest.raises(ValueError, match="Unknown exit_mode"):
+            simulate_trades(high, low, close, e, e.astype(np.int8), e.astype(float),
+                            e.astype(float), max_hold=10, exit_mode="RR")
+
     def test_rr_only_options_at_zero_are_fine(self, simple_uptrend):
         high, low, close = simple_uptrend
         r = _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="trailing",

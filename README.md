@@ -208,7 +208,7 @@ expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJ
 
 Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`. BG-05 always runs (it assumes 60-minute fills unless you pass `resolution_minutes`).
 
-The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars), slightly short for FX. A market open fewer hours reads much shorter, and one open every day (crypto) about 1.4× too long, so pass `timestamps` (Unix seconds) to `bug_guard()` / `gk.gate0_validate()`: BG-06 then uses the first and last bar time, and WARNs if `n_bars` differs from the number of timestamps. Milliseconds are an ERROR.
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars), slightly short for FX. A market open fewer hours reads much shorter, and one open every day (crypto) about 1.4× too long, so pass `timestamps` (Unix seconds) to `bug_guard()` / `gk.gate0_validate()`: BG-06 then uses the first and last bar time, and if `n_bars` is smaller than the number of timestamps, the estimate from `n_bars` must pass too. Milliseconds are an ERROR.
 
 ```python
 from backtest_engine import bug_guard, BrokerCost, EXIT_NO_FILL
@@ -292,7 +292,7 @@ from backtest_engine import GateKeeper, BrokerCost
 
 gk = GateKeeper(
     strategy_name="SMA Crossover v3",
-    n_bars=7022,
+    n_bars=len(close),             # bars of the signal timeframe (1h also with hires)
     bar_minutes=60,
     resolution_minutes=1,          # fills simulated on 1m bars (simulate_trades_hires)
     spreads_used=spreads,

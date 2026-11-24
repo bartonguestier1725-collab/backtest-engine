@@ -79,9 +79,6 @@ class TradeResults(np.ndarray):
         from backtest_engine._types import EXIT_NO_FILL
         return self[np.asarray(self["exit_type"]) != EXIT_NO_FILL]
 
-    def _filled_pnl(self) -> np.ndarray:
-        return self.filled["pnl_r"]
-
     @property
     def n_filled(self) -> int:
         """Number of trades that filled (``len(results)`` also counts NO_FILL rows).
@@ -105,7 +102,7 @@ class TradeResults(np.ndarray):
     @property
     def win_rate(self) -> float:
         """Fraction of filled trades with pnl_r > 0.  Returns 0.0 if none filled."""
-        pnl = self._filled_pnl()
+        pnl = self.filled["pnl_r"]
         if len(pnl) == 0:
             return 0.0
         return float(np.mean(pnl > 0))
@@ -113,7 +110,7 @@ class TradeResults(np.ndarray):
     @property
     def expectancy_r(self) -> float:
         """Mean pnl_r per filled trade.  Returns 0.0 if none filled."""
-        pnl = self._filled_pnl()
+        pnl = self.filled["pnl_r"]
         if len(pnl) == 0:
             return 0.0
         return float(np.mean(pnl))
@@ -126,7 +123,7 @@ class TradeResults(np.ndarray):
         Returns 0.0 if none filled or if any trade causes total ruin
         (equity <= 0).
         """
-        pnl = self._filled_pnl()
+        pnl = self.filled["pnl_r"]
         if len(pnl) == 0:
             return 0.0
         risk_frac = 0.01
@@ -140,7 +137,7 @@ class TradeResults(np.ndarray):
     def sharpe_r(self) -> float:
         """Sharpe-like ratio over filled trades: mean(pnl_r) / std(pnl_r).
         Returns 0.0 if fewer than 2 filled."""
-        pnl = self._filled_pnl()
+        pnl = self.filled["pnl_r"]
         if len(pnl) < 2:
             return 0.0
         std = float(np.std(pnl, ddof=1))
@@ -152,7 +149,7 @@ class TradeResults(np.ndarray):
     def sortino_r(self) -> float:
         """Sortino-like ratio over filled trades: mean(pnl_r) / downside_std(pnl_r).
         Returns 0.0 if fewer than 2 filled."""
-        pnl = self._filled_pnl()
+        pnl = self.filled["pnl_r"]
         if len(pnl) < 2:
             return 0.0
         downside = pnl[pnl < 0]
