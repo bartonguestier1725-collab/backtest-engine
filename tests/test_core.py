@@ -312,6 +312,12 @@ class TestValidation:
             _single_trade(high, low, close, LONG, 5.0, 10.0, 10,
                           exit_mode=mode, **{opt: 0.5 if opt != "retrace_timeout" else 3}, **extra)
 
+    def test_unknown_mode_with_rr_option_names_the_mode(self, simple_uptrend):
+        high, low, close = simple_uptrend
+        with pytest.raises(ValueError, match="Unknown exit_mode"):
+            _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="RR",
+                          be_trigger_pct=0.5)
+
     def test_rr_only_options_at_zero_are_fine(self, simple_uptrend):
         high, low, close = simple_uptrend
         r = _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="trailing",

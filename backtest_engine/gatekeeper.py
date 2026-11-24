@@ -187,7 +187,7 @@ class GateKeeper:
             missing.append("source_path (BG-04/07/09 skipped)")
         if self.spreads_used is None:
             missing.append("spreads_used (BG-02 skipped)")
-        if self.n_bars == 0 and timestamps is None:
+        if self.n_bars == 0 and (timestamps is None or len(timestamps) < 2):
             missing.append("n_bars or timestamps (BG-06 skipped)")
         if not self.resolution_declared:
             missing.append(
@@ -232,7 +232,6 @@ class GateKeeper:
                 sl_f = sl[filled][order]
                 trade_kwargs["sl_distances"] = sl_f
                 cost = f["cost_r"]
-                trade_kwargs["has_costs"] = bool(np.any(cost != 0))
                 trade_kwargs["cost_is_fixed"] = bool(
                     len(cost) > 1 and np.any(cost != 0) and np.ptp(cost) == 0
                 )

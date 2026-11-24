@@ -95,7 +95,7 @@ for i, combo in enumerate(combos):
     )
 
     pnl = res["pnl_r"]
-    if len(pnl) < 30:
+    if res.n_filled < 30:
         continue
 
     pf = res.profit_factor

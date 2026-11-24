@@ -13,22 +13,32 @@ change. Some metrics and checks do (first section).
   diluted them. PF, total R, max DD and recovery factor are unchanged. New
   `results.n_filled` gives the trade count; use it as `n_trades` in a
   GateKeeper `run_func` (`len(results)` counts the `NO_FILL` rows too, and
-  Gates 1–2 compare it with their minimum trade counts). The HTML report
+  Gates 1–2 compare it with their minimum trade counts). New
+  `results.filled` drops the `NO_FILL` rows; the README and examples pass
+  `results.filled["pnl_r"]` to `MonteCarloDD` and `StressTest` (for the
+  shuffled max DD this changes nothing; Kelly's win rate and StressTest's
+  `cost_add_r` no longer count orders that never filled). The HTML report
   leaves `NO_FILL` rows out of the histogram, the monthly and yearly tables
   and the exit shares, and says how many it left out.
 - **BG-06 uses the bar times.** `bug_guard(timestamps=)` and
   `gk.gate0_validate(timestamps=)` ignored them for the data period and
   estimated it from the bar count. They now measure the first to the last bar
-  time; timestamps in milliseconds or nanoseconds are a BG-06 ERROR. Without
+  time; timestamps in milliseconds or nanoseconds are a BG-06 ERROR (and
+  BG-10 reports non-integer times instead of raising), and a bar count that
+  differs from the number of timestamps is a WARN. Without
   timestamps the estimate is 24 h × 22 days a month (528 1h bars), not
   17 h × 22 days (374): FX trades about 21.7 days of 24 h, so the old
   estimate read 8.7 months of AggVault EURUSD 1h as 12.1 months and passed
-  the 12-month minimum. The new one errs short (5 years read as 59 months).
-  Data that passed before can now fail, e.g. 300,000 1m bars (9.5 months).
-- **`simulate_trades` raises on options it would ignore.** A non-zero
-  `be_trigger_pct`, `retrace_pct` or `retrace_timeout` with an `exit_mode`
-  other than `"rr"` raises `ValueError` (it entered at market without
-  breakeven). Also through `simulate_trades_hires`.
+  the 12-month minimum. The new one errs short (5 years read as 59 months),
+  except for markets open every day (crypto reads about 1.4× long: pass
+  timestamps). Data that passed before can now fail, e.g. 300,000 1m bars
+  (9.5 months).
+- **`simulate_trades` raises on rr-only options in other modes.** A
+  non-zero `be_trigger_pct`, `retrace_pct` or `retrace_timeout` with
+  `exit_mode="trailing"`, `"custom"` or `"sar_trailing"` raises `ValueError`
+  (it entered at market without breakeven). Also through
+  `simulate_trades_hires`. Other mode-specific options are still ignored
+  outside their mode (e.g. `trail_activation_r` with `"rr"`).
 - **The audit no longer passes a file it tested only half of.** A file with
   only `signals()` or only `backtest()` gets a `warn` for the missing test
   (`details["not_run"]`, and a summary of what was not tested) instead of an
@@ -73,12 +83,11 @@ change. Some metrics and checks do (first section).
 - Gate 3's message says "WFA OOS positive split share" (the share of WFA
   splits with a positive OOS metric), not "win rate".
 - BG-12 said "Per-trade cost used (correct)" also when no cost was applied.
-  It now says GROSS (no cost), per-trade cost, or not checked.
+  It now says "No fixed cost reported (per-trade costs, or none applied)".
 
 ### Docs
 
-- README, CLAUDE.md, AGENTS.md: BG-06 is an ERROR, not a warning, and
-  `bug_guard()`/GateKeeper cannot take `start_ts`/`end_ts`; BugGuard has no
+- README, CLAUDE.md, AGENTS.md: BG-06 is an ERROR, not a warning; BugGuard has no
   default cost registry; `generate_report` builds the equity curve and the
   Gate/WFA/CSCV tables only from values you pass (`WfaRow`, `CscvResult`),
   and DD% needs a balance curve, not cumulative R; `custom` exits ignore TP;

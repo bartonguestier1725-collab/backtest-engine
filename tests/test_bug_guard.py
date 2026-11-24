@@ -505,16 +505,27 @@ class TestDataPeriodFromTimestamps:
     def test_no_bars_no_timestamps_skips(self):
         assert self._bg06() == []
 
+    def test_bar_count_mismatch_warns(self):
+        """A sliced close with the full ts would pass on the ts span alone."""
+        ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)  # 10 years
+        (r,) = self._bg06(n_bars=1500, bar_minutes=60, timestamps=ts)
+        assert not r.passed and r.severity == "WARN" and "n_bars=1500" in r.message
+
+    def test_nan_and_mixed_timezones_are_bg06_errors(self):
+        from backtest_engine.bug_guard import check_data_period
+        with pytest.raises(ValueError, match="NaN"):
+            check_data_period(100, 60, start_ts=float("nan"), end_ts=1704067200)
+        import pandas as pd
+        mixed = np.array([pd.Timestamp("2021-01-01"), pd.Timestamp("2024-01-01", tz="UTC")],
+                         dtype=object)
+        rep = run_all_checks(resolution_minutes=1, strict=False, _suppress_print=True,
+                             timestamps=mixed)
+        bad = {r.check_id for r in rep.results if not r.passed and r.severity == "ERROR"}
+        assert bad == {"BG-06", "BG-10"}  # no TypeError
+
 
 class TestFixedCostMessages:
-    def test_gross_is_not_called_correct(self):
-        r = check_fixed_cost_usage(np.array([1.0, 2.0]), cost_is_fixed=False, has_costs=False)
-        assert r.passed and "GROSS" in r.message and "correct" not in r.message
-
-    def test_unknown_costs_are_not_called_correct(self):
+    def test_no_fixed_cost_is_not_called_correct(self):
+        """It said "Per-trade cost used (correct)" also with no cost at all."""
         r = check_fixed_cost_usage(np.array([1.0, 2.0]))
-        assert r.passed and "not checked" in r.message and "correct" not in r.message
-
-    def test_per_trade_costs(self):
-        r = check_fixed_cost_usage(np.array([1.0, 2.0]), cost_is_fixed=False, has_costs=True)
-        assert r.passed and "per-trade" in r.message
+        assert r.passed and "No fixed cost reported" in r.message and "correct" not in r.message

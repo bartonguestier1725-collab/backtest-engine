@@ -201,7 +201,7 @@ def main():
         max_hold=100, open_prices=OPEN, entry_costs=costs, preflight=False,
     )
 
-    mc = MonteCarloDD(results["pnl_r"], n_sims=10_000, risk_pct=0.01, seed=42)
+    mc = MonteCarloDD(results.filled["pnl_r"], n_sims=10_000, risk_pct=0.01, seed=42)
     mc.run()
     result4 = gk.gate4_montecarlo(mc, dd_limit=0.20)
 
@@ -211,7 +211,7 @@ def main():
     # ── Bonus: StressTest ─────────────────────────────────────────────────
     if result4.passed:
         print("\n--- Stress Test (post-validation) ---")
-        st = StressTest(results["pnl_r"], n_sims=1000, seed=42)
+        st = StressTest(results.filled["pnl_r"], n_sims=1000, seed=42)
         report = st.run_all(block_size=10)
         print(f"Baseline DD@95%: {report['baseline']['dd_95']*100:.1f}%")
         print(f"Block bootstrap DD@95%: {report['block_bootstrap']['dd_95']*100:.1f}%")

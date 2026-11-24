@@ -330,6 +330,7 @@ class TestMetricsSkipNoFill:
                               max_hold=20, retrace_pct=0.06, retrace_timeout=2, preflight=False)
         f = res[res["exit_type"] != EXIT_NO_FILL]
         assert 0 < len(f) < len(res)
-        assert res.n_filled == len(f)
+        assert res.n_filled == len(f) == len(res.filled)
+        np.testing.assert_array_equal(res.filled["pnl_r"], f["pnl_r"])
         assert res.win_rate == pytest.approx(float(np.mean(f["pnl_r"] > 0)))
         assert res.expectancy_r == pytest.approx(float(np.mean(f["pnl_r"])))

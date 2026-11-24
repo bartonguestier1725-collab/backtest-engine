@@ -178,3 +178,11 @@ class TestNoFillLeftOut:
         # Exit shares are of the 40 filled trades
         n_sl = int(np.sum(arr["exit_type"][10:] == EXIT_SL))
         assert f"<td>{n_sl}</td><td>{n_sl / 40 * 100:.1f}%</td>" in html
+
+    def test_all_no_fill_says_so(self, tmp_html):
+        from backtest_engine._types import EXIT_NO_FILL
+        trades = _make_trades(5)
+        np.asarray(trades)["exit_type"][:] = EXIT_NO_FILL
+        generate_report(ReportConfig(title="t", trades=trades,
+                                     trade_timestamps=_make_timestamps()), tmp_html)
+        assert "約定した取引がありません（約定しなかったシグナル 5 件）" in tmp_html.read_text()

@@ -113,9 +113,9 @@ def run_full(params: dict) -> dict | None:
         max_hold=params.get("max_hold", 48), exit_mode="rr",
         open_prices=opens, preflight=False,
     )
-    if len(res["pnl_r"]) < 10:
+    if res.n_filled < 10:
         return None
-    return {"pnl_r": res["pnl_r"], "pf": res.profit_factor}
+    return {"pnl_r": res.filled["pnl_r"], "pf": res.profit_factor}
 
 
 def per_bar_ratio(wfa: dict) -> float:

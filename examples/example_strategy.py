@@ -102,7 +102,7 @@ def main():
     print(f"\nQuality Grade: {results.quality.grade}")
 
     # 8. Analyze results using TradeResults convenience metrics
-    pnl = results["pnl_r"]
+    pnl = results.filled["pnl_r"]  # NO_FILL rows are not trades
     print(f"\n--- Trade Results (net of costs) ---")
     print(f"Total trades: {results.n_filled}")
     print(f"Profit Factor: {results.profit_factor:.2f}")
@@ -116,7 +116,7 @@ def main():
 
     # Exit type breakdown
     for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout"), (EXIT_BE, "BE")]:
-        count = np.sum(results["exit_type"] == exit_type)
+        count = np.sum(results.filled["exit_type"] == exit_type)
         if count > 0:
             print(f"  {name}: {count} ({count/results.n_filled*100:.0f}%)")
 

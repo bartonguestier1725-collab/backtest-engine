@@ -23,7 +23,7 @@ Numba JIT-accelerated trade simulator and validation toolkit.
 
 - **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
 - **Strategy audit** (`python -m backtest_engine.audit my_strategy.py --json`) — finds look-ahead by behavior, not by reading code: rewrites the future and checks that past signals do not change, and runs the whole backtest on random walks where no edge can exist. JSON output for AI assistants. Measured on a labeled benchmark of 28 strategies ([bench/](bench/README.md))
-- **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. The data period (BG-06) comes from the bar times when you pass `timestamps`; without them it is estimated from the bar count at FX hours, which reads other markets far too short. These are pattern and index checks: use the audit for look-ahead in signal code
+- **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. The data period (BG-06) comes from the bar times when you pass `timestamps`; without them it is estimated from the bar count at FX hours, which is wrong for other markets. These are pattern and index checks: use the audit for look-ahead in signal code
 - **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard (pass your simulation result so the trade-level checks run), Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
 
 ## Install
@@ -68,8 +68,8 @@ results = simulate_trades(
 )
 
 # Results (GROSS: before broker-specific costs)
-print(f"Win rate: {np.mean(results['pnl_r'] > 0) * 100:.1f}%")
-print(f"Avg PnL: {np.mean(results['pnl_r']):.3f}R")
+print(f"Win rate: {results.win_rate:.1%}")
+print(f"Avg PnL: {results.expectancy_r:.3f}R")
 ```
 
 ## Multi-resolution execution
@@ -208,7 +208,7 @@ expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJ
 
 Checks for 14 known backtesting bugs before you trust any result. Each check runs only when you pass the inputs it needs (source path, trade arrays, costs, timestamps); a check whose inputs are missing is skipped, and `GateKeeper` reports the skipped ones as `GK-00`. BG-05 always runs (it assumes 60-minute fills unless you pass `resolution_minutes`).
 
-The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars). FX trades about 21.7 days a month, so it errs short (5 years of AggVault EURUSD 1h reads as 59 months), and a market open fewer hours reads much shorter. With `timestamps` (Unix seconds, as `bug_guard()` and `gk.gate0_validate()` take them), BG-06 uses the first and last bar time instead; milliseconds are an ERROR. `check_data_period(n_bars, bar_minutes, start_ts=, end_ts=)` does the same on its own.
+The checks themselves are instrument-agnostic (look-ahead in the trade arrays, bfill leak, same-bar reentry, etc.). The only FX-specific part is the data period estimate (BG-06), used when you pass `n_bars` but no `timestamps`: 24 h × 22 days a month (528 1h bars), slightly short for FX. A market open fewer hours reads much shorter, and one open every day (crypto) about 1.4× too long, so pass `timestamps` (Unix seconds) to `bug_guard()` / `gk.gate0_validate()`: BG-06 then uses the first and last bar time, and WARNs if `n_bars` differs from the number of timestamps. Milliseconds are an ERROR.
 
 ```python
 from backtest_engine import bug_guard, BrokerCost, EXIT_NO_FILL
@@ -330,7 +330,7 @@ gk.GATE4_MIN_MC_PASS = 0.80
 
 How long each gate takes depends on your `run_func` and `evaluate_fn`; Gate 1 and 2 run one backtest per combo.
 
-Gate 0 also emits a `GK-00 WARN` listing every missing input (`source_path`, `spreads_used`, `n_bars` or `timestamps`, `resolution_minutes`, `trades`, `sl_distances` + `avg_price`, `timestamps`) and the checks it skips or estimates. `timestamps` are the times of every bar of the signal timeframe; BG-06 takes the data period from them. If `resolution_minutes` is not given, BG-05 assumes the fills were simulated on `bar_minutes` bars. With `trades`, BG-08 reports trades that enter on the bar where the previous trade exits as a WARN (trades are simulated independently, so overlap is not a bug by itself; deeper overlaps are not reported). BG-01 and BG-13 do not run in Gate 0: call `bug_guard()` for them. Gate 0 does not look for look-ahead in your signal code; run the [strategy audit](#strategy-audit) for that.
+Gate 0 also emits a `GK-00 WARN` listing every missing input (`source_path`, `spreads_used`, `resolution_minutes`, `trades`, `sl_distances` + `avg_price`, `timestamps`; `n_bars` only if there are no `timestamps` either) and the checks it skips or estimates. `timestamps` are the times of every bar of the signal timeframe; BG-06 takes the data period from them. If `resolution_minutes` is not given, BG-05 assumes the fills were simulated on `bar_minutes` bars. With `trades`, BG-08 reports trades that enter on the bar where the previous trade exits as a WARN (trades are simulated independently, so overlap is not a bug by itself; deeper overlaps are not reported). BG-01 and BG-13 do not run in Gate 0: call `bug_guard()` for them. Gate 0 does not look for look-ahead in your signal code; run the [strategy audit](#strategy-audit) for that.
 
 ### run_func
 
@@ -373,7 +373,7 @@ Gate 4 validates that the strategy survives randomized trade-order scenarios.
 ```python
 from backtest_engine import MonteCarloDD
 
-mc = MonteCarloDD(results['pnl_r'], n_sims=10_000, risk_pct=0.01, seed=42)
+mc = MonteCarloDD(results.filled["pnl_r"], n_sims=10_000, risk_pct=0.01, seed=42)
 mc.run()
 
 gk.gate4_montecarlo(mc, dd_limit=0.20, confidence=95.0)
@@ -398,7 +398,7 @@ print(f"Max DD: {results.max_drawdown_r:.1f}R")  # Peak-to-trough in R
 print(f"RF: {results.recovery_factor:.2f}")      # total_r / max_dd_r
 ```
 
-All properties handle edge cases (empty results, no losses, no wins) and return plain floats. Win rate, expectancy, geometric mean, Sharpe and Sortino count filled trades only: a `NO_FILL` row (pnl_r = 0) is a signal that never entered. PF, max DD and recovery factor are the same either way. Before v0.6.1 they counted `NO_FILL` rows as trades, which diluted win rate and expectancy for limit entries.
+All properties handle edge cases (empty results, no losses, no wins) and return plain floats. Win rate, expectancy, geometric mean, Sharpe and Sortino count filled trades only: a `NO_FILL` row (pnl_r = 0) is a signal that never entered. PF, max DD and recovery factor are the same either way. `results.filled` is the result without the `NO_FILL` rows; pass `results.filled["pnl_r"]` to `MonteCarloDD` and `StressTest`.
 
 ## Monte Carlo & prop firm check
 
@@ -424,7 +424,7 @@ Stress-test a strategy's robustness beyond simple Monte Carlo shuffling.
 ```python
 from backtest_engine import StressTest
 
-st = StressTest(results['pnl_r'], n_sims=1000, seed=42)
+st = StressTest(results.filled["pnl_r"], n_sims=1000, seed=42)
 
 # Block bootstrap — preserves losing-streak autocorrelation
 bb = st.block_bootstrap(block_size=10)

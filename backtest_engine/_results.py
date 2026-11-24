@@ -70,10 +70,17 @@ class TradeResults(np.ndarray):
     # data) has pnl_r = 0 and is not a trade. PF, max DD and recovery factor
     # are the same either way, since 0R rows add nothing to them.
 
-    def _filled_pnl(self) -> np.ndarray:
+    @property
+    def filled(self) -> "TradeResults":
+        """The trades that filled (NO_FILL rows removed).
+
+        Pass ``results.filled["pnl_r"]`` to MonteCarloDD / StressTest.
+        """
         from backtest_engine._types import EXIT_NO_FILL
-        arr = np.asarray(self)
-        return np.asarray(arr["pnl_r"][arr["exit_type"] != EXIT_NO_FILL])
+        return self[np.asarray(self["exit_type"]) != EXIT_NO_FILL]
+
+    def _filled_pnl(self) -> np.ndarray:
+        return self.filled["pnl_r"]
 
     @property
     def n_filled(self) -> int:
@@ -81,7 +88,7 @@ class TradeResults(np.ndarray):
 
         Use this as ``n_trades`` in a GateKeeper ``run_func``.
         """
-        return int(len(self._filled_pnl()))
+        return int(len(self.filled))
 
     @property
     def profit_factor(self) -> float:

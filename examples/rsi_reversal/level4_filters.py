@@ -184,7 +184,7 @@ print(f"{'-'*70}")
 
 for name, cfg in configs:
     res, dirs = run_detail(cfg)
-    pnl = res["pnl_r"]
+    pnl = res.filled["pnl_r"]
     if len(pnl) < 10:
         print(f"{name:>20} | insufficient trades")
         continue
@@ -221,6 +221,7 @@ for params in param_grid_filtered:
 
 if best_params:
     res, dirs = run_detail(best_params)
+    res = res.filled
     pnl = res["pnl_r"]
     print(f"\nBest: RSI({best_params['rsi_period']}) "
           f"{best_params['oversold']}/{best_params['overbought']}, "
@@ -271,7 +272,7 @@ if best_params:
     print("=" * 70)
 
     res_full, _ = run_detail(best_params)
-    pnl_full = res_full["pnl_r"]
+    pnl_full = res_full.filled["pnl_r"]
 
     mc = MonteCarloDD(pnl_full, n_sims=10_000, risk_pct=0.01, seed=42)
     mc.run()

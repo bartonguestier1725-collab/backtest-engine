@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from backtest_engine import (
     fetch_aggvault, simulate_trades_hires,
-    LONG, SHORT, EXIT_SL, EXIT_TP, EXIT_TIME, EXIT_NO_FILL,
+    LONG, SHORT, EXIT_SL, EXIT_TP, EXIT_TIME,
     rsi, atr,
 )
 
@@ -81,13 +81,15 @@ results = simulate_trades_hires(
 )
 
 # ── Step 6: 結果表示 ──────────────────────────────────────────────────
-pnl = results["pnl_r"]
+filled = results.filled  # NO_FILL rows (signals outside the 1m data) are not trades
+pnl = filled["pnl_r"]
+n_no_fill = len(results) - len(filled)
 
 print(f"\n{'='*60}")
 print(f"RSI(14) Reversal — EURUSD — 5 Years")
 print(f"Signal: 1h | Execution: 1m | {results.cost_label}")
 print(f"{'='*60}")
-print(f"Trades:        {len(pnl)}")
+print(f"Trades:        {len(pnl)}" + (f" (+{n_no_fill} signals not filled)" if n_no_fill else ""))
 print(f"Profit Factor: {results.profit_factor:.2f}")
 print(f"Win Rate:      {results.win_rate:.1%}")
 print(f"Expectancy:    {results.expectancy_r:.3f}R")
@@ -98,15 +100,15 @@ print(f"Recovery:      {results.recovery_factor:.2f}")
 
 # Exit type breakdown
 print(f"\nExit breakdown:")
-for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout"), (EXIT_NO_FILL, "No fill")]:
-    count = np.sum(results["exit_type"] == exit_type)
+for exit_type, name in [(EXIT_SL, "SL"), (EXIT_TP, "TP"), (EXIT_TIME, "Timeout")]:
+    count = np.sum(filled["exit_type"] == exit_type)
     if count > 0:
-        subset = pnl[results["exit_type"] == exit_type]
+        subset = pnl[filled["exit_type"] == exit_type]
         avg = np.mean(subset)
         print(f"  {name:>8}: {count:>4} ({count/len(pnl)*100:>5.1f}%) | avg {avg:+.3f}R")
 
 # Yearly breakdown (map 1m entry bars back to dates)
-entry_bars_1m = results["entry_bar"]
+entry_bars_1m = filled["entry_bar"]
 entry_dates = pd.to_datetime(ts_1m[entry_bars_1m], unit="s", utc=True)
 print(f"\n{'Year':>6} {'PnL(R)':>10} {'n':>5} {'WR':>6} {'PF':>6}")
 for year in range(2021, 2027):

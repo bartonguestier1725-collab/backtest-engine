@@ -244,8 +244,6 @@ def _build_exit_breakdown(trades, n_no_fill: int = 0) -> str:
     hb = np.asarray(trades["hold_bars"])
     rows = []
     for code in sorted(set(int(x) for x in et)):
-        if code == _EXIT_NO_FILL:
-            continue
         mask = et == code
         cnt = int(np.sum(mask))
         if cnt == 0:
@@ -468,6 +466,10 @@ def generate_report(cfg: ReportConfig, output: str | Path) -> Path:
         n_no_fill = int(np.sum(~filled))
         trades = trades[filled]
         has_trades = len(trades) > 0
+        if not has_trades:
+            parts.append(
+                f'<p style="color:#666;">約定した取引がありません'
+                f'（約定しなかったシグナル {n_no_fill} 件）。</p>')
     has_ts = cfg.trade_timestamps is not None
     if has_trades and has_ts:
         max_eb = int(np.max(np.asarray(trades["entry_bar"])))

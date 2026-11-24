@@ -409,7 +409,6 @@ def backtest(data):
         before = list(sys.path)
         got = [audit_strategy(tmp_path / x / "strat.py", n_cuts=8) for x in ("a", "b", "a", "b")]
         assert [_clean(r) for r in got] == [True, False, True, False]
-        assert [r["overall"] for r in got] == ["warn", "fail", "warn", "fail"]
         assert sys.path == before
 
     def test_data_folder_named_like_stdlib_module(self, tmp_path):

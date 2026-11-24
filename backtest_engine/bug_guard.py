@@ -291,8 +291,9 @@ def check_data_period(
     Otherwise estimates from bar count assuming FX market hours (24h/day,
     22 trading days/month = 528 bars/month for 1h). FX trades about 21.7
     days a month, so the estimate errs short (5 years of AggVault EURUSD 1h
-    reads as 59 months); markets with fewer hours read much shorter, so pass
-    the dates for them.
+    reads as 59 months). Markets with fewer hours read much shorter, and a
+    market open every day (crypto, 30.4 days a month) reads about 1.4× too
+    long, so pass the dates for those.
     """
     if start_ts is not None and end_ts is not None:
         import pandas as pd
@@ -301,6 +302,8 @@ def check_data_period(
             if isinstance(x, (int, float, np.integer, np.floating)):
                 # Numbers are Unix seconds (pd.Timestamp(int) reads ns).
                 # 1e11 s is the year 5138; larger values are ms or ns.
+                if np.isnan(x):
+                    raise ValueError("check_data_period: start_ts/end_ts is NaN")
                 if not abs(float(x)) < 1e11:
                     raise ValueError(
                         f"check_data_period: {x!r} is not Unix seconds "
@@ -458,7 +461,6 @@ def check_open_prices_provided(open_prices_provided: bool) -> CheckResult:
 def check_fixed_cost_usage(
     sl_distances: np.ndarray,
     cost_is_fixed: bool = False,
-    has_costs: Optional[bool] = None,
 ) -> CheckResult:
     """BG-12: Warn if fixed cost is used with varying SL distances.
 
@@ -469,18 +471,14 @@ def check_fixed_cost_usage(
     ----------
     sl_distances : SL distances for all trades.
     cost_is_fixed : True if caller used scalar as_r() instead of per-trade cost.
-    has_costs : True if any trade has a cost, False if none (GROSS), None if
-                unknown. GateKeeper's Gate 0 reads both from ``cost_r``.
+                    GateKeeper's Gate 0 infers it from ``cost_r``.
     """
-    if has_costs is False:
-        return CheckResult("BG-12", True, "No execution costs (GROSS): no fixed cost to check")
+    if not cost_is_fixed:
+        return CheckResult("BG-12", True,
+                           "No fixed cost reported (per-trade costs, or none applied)")
+
     if len(sl_distances) < 2:
         return CheckResult("BG-12", True, "Too few trades to check cost variation")
-    if not cost_is_fixed:
-        if has_costs:
-            return CheckResult("BG-12", True, "Cost differs between trades (per-trade cost)")
-        return CheckResult("BG-12", True,
-                           "Not reported as a fixed cost (cost_is_fixed=False); not checked")
 
     cv = np.std(sl_distances) / np.mean(sl_distances) if np.mean(sl_distances) > 0 else 0.0
     if cv > 0.10:
@@ -543,7 +541,11 @@ def check_incomplete_bars(
     expected_interval_minutes : Bar size.
     now : Current Unix time (default: time.time()). For tests.
     """
-    ts = np.asarray(timestamps, dtype=np.int64)
+    try:
+        ts = np.asarray(timestamps, dtype=np.int64)
+    except (TypeError, ValueError):
+        return CheckResult("BG-10", False,
+                           "BAD TIMESTAMPS: bar times must be Unix seconds (integers).")
     if len(ts) < 2:
         return CheckResult("BG-10", True, "Too few bars to check")
     n_bad = int(np.sum(np.diff(ts) <= 0))
@@ -656,7 +658,6 @@ def run_all_checks(
     open_prices_provided: Optional[bool] = None,
     sl_distances: Optional[np.ndarray] = None,
     cost_is_fixed: bool = False,
-    has_costs: Optional[bool] = None,
     signal_spreads: Optional[np.ndarray] = None,
     max_spread: float = 0.0,
     avg_price: float = 0.0,
@@ -687,8 +688,6 @@ def run_all_checks(
     open_prices_provided : True if open_prices was passed to simulate_trades().
     sl_distances : SL distances for all trades (for BG-12 fixed-cost check).
     cost_is_fixed : True if scalar cost was used instead of per-trade cost.
-    has_costs : False if the trades carry no execution cost (GROSS), True if
-                they do, None if unknown (BG-12 message only).
     signal_spreads : Spread at signal time for each trade (for BG-13).
     max_spread : Maximum spread allowed in price units (for BG-13). 0 = no check.
     avg_price : Representative price level for BG-14 no-SL detection
@@ -739,8 +738,14 @@ def run_all_checks(
         try:
             r = check_data_period(n_bars or len(t), bar_minutes, min_months,
                                   start_ts=t.min(), end_ts=t.max())
-        except ValueError as e:  # milliseconds, nanoseconds, NaT
+        except (ValueError, TypeError) as e:  # ms/ns, NaN/NaT, naive mixed with aware
             r = CheckResult("BG-06", False, f"BAD TIMESTAMPS: {e}")
+        if n_bars and n_bars != len(t):
+            # e.g. close sliced to a short window but the full ts passed
+            note = (f" n_bars={n_bars} but {len(t)} timestamps: BG-06 used the "
+                    f"timestamps; pass the times of the bars you tested.")
+            r = (CheckResult("BG-06", False, r.message + note, severity="WARN")
+                 if r.passed else CheckResult("BG-06", False, r.message + note))
         report.results.append(r)
     elif n_bars > 0:
         report.results.append(check_data_period(n_bars, bar_minutes, min_months))
@@ -755,7 +760,7 @@ def run_all_checks(
 
     # BG-12: Fixed cost with varying SL
     if sl_distances is not None:
-        report.results.append(check_fixed_cost_usage(sl_distances, cost_is_fixed, has_costs))
+        report.results.append(check_fixed_cost_usage(sl_distances, cost_is_fixed))
 
     # BG-13: Spread filter violations
     if signal_spreads is not None or max_spread > 0.0:

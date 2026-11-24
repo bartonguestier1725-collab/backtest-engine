@@ -156,16 +156,22 @@ class TestGate0TradeChecks:
         trades, sl, _ = _sim_trades()
         self._gk().gate0_validate(trades=trades, sl_distances=sl)
         out = capsys.readouterr().out
-        assert "No execution costs (GROSS)" in out and "(correct)" not in out
+        assert "No fixed cost reported" in out and "(correct)" not in out
 
-    def test_timestamps_give_bg06_the_period(self):
+    def test_timestamps_give_bg06_the_period(self, capsys):
         """v0.6.1: Gate 0 used n_bars for BG-06 even when given the bar times."""
         trades, sl, close = _sim_trades()
         ts = 1609459200 + 3600 * np.arange(len(close), dtype=np.int64)  # ~7 months of 1h
-        gk = GateKeeper(strategy_name="t", n_bars=10_000_000, bar_minutes=60,
+        gk = GateKeeper(strategy_name="t", n_bars=len(close), bar_minutes=60,
                         resolution_minutes=60)
+        # The message says the period came from ts, not from n_bars
         with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
             gk.gate0_validate(trades=trades, timestamps=ts)
+        assert "SHORT PERIOD: 6.8 months (from the first and last bar times)" in capsys.readouterr().out
+
+    def test_empty_timestamps_reported(self, capsys):
+        GateKeeper(strategy_name="t", bar_minutes=60).gate0_validate(timestamps=np.array([]))
+        assert "n_bars or timestamps (BG-06 skipped)" in capsys.readouterr().out
 
     def test_overlapping_1h_trades_warn_not_block(self, capsys):
         """Independent trades often overlap; that is not a same-bar re-entry
