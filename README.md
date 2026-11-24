@@ -119,11 +119,14 @@ For this strategy the two are close. The difference can be larger when SL/TP are
 | `exit_mode="trailing"` | Trailing stop |
 | `exit_mode="sar_trailing"` | Parabolic SAR-based trailing (with direction-aware Plan B) |
 | `exit_mode="custom"` | SL + exit on an external signal (`tp_distances` is ignored) |
-| `be_trigger_pct` | Move SL to entry price when profit reaches this fraction of TP (0 = disabled). `exit_mode="rr"` only; other modes raise `ValueError` if it is not 0 |
-| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP from the signal close before filling (0 = market entry). SL/TP are measured from the fill price. `exit_mode="rr"` only (with `retrace_timeout`); other modes raise `ValueError` if either is not 0 |
+| `be_trigger_pct` | Move SL to entry price when profit reaches this fraction of TP (0 = disabled). `exit_mode="rr"` only |
+| `retrace_pct` | Limit entry: wait for price to retrace this fraction of TP from the signal close before filling (0 = market entry). SL/TP are measured from the fill price. `exit_mode="rr"` only |
 | `retrace_timeout` | Max bars to wait for limit fill before cancelling (`exit_mode="rr"` only) |
-| `trail_activation_r` | R-multiple required to activate trailing stop |
-| `trail_distance_r` | Trailing stop distance in R-multiples |
+| `trail_activation_r` | R-multiple required to activate trailing stop (`exit_mode="trailing"` only) |
+| `trail_distance_r` | Trailing stop distance in R-multiples (`exit_mode="trailing"` only) |
+| `exit_signals` / `sar_values` | Exit signal per bar (`"custom"` only) / Parabolic SAR per bar (`"sar_trailing"` only) |
+
+An option of another mode (a non-zero `trail_activation_r` with the default `exit_mode="rr"`, `exit_signals` with `"trailing"`, ...) raises `ValueError`: that mode would ignore it.
 | `open_prices` | Enter at next-bar open instead of signal-bar close (supported in all modes). Also lets stops fill at the open on a gap |
 | `entry_costs` | Per-trade cost array in R-units (e.g. from `BrokerCost.per_trade_cost()`). Subtracted from `pnl_r` post-simulation. `NO_FILL` trades automatically get zero cost |
 
@@ -553,7 +556,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Stop gaps** — With `open_prices`, a stop that the market gaps through fills at the open (see [Fill rules](#fill-rules)).
 - **Cost underestimation** — BugGuard BG-02 compares the `spreads_used` you declare with `expected_costs` (pass both; it does not read `entry_costs`). Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
 - **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
-- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months of data, taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
+- **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months less 1 week of data (11.75 months, so that a calendar year of FX passes: it starts and ends at a weekend or holiday close), taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder converts a fixed UTC offset (`tz_offset_hours`, no daylight saving time).
 
 **NOT handled — your responsibility:**

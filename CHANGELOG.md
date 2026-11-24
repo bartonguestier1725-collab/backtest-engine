@@ -34,14 +34,19 @@ change. Some metrics and checks do (first section).
   the 12-month minimum. The new one errs short (5 years read as 59 months),
   except for markets open every day (crypto reads about 1.4× long: pass
   timestamps). Data that passed before can now fail, e.g. 300,000 1m bars
-  (9.5 months).
-- **`simulate_trades` raises on rr-only options in other modes.** A
-  non-zero `be_trigger_pct`, `retrace_pct` or `retrace_timeout` with
-  `exit_mode="trailing"`, `"custom"` or `"sar_trailing"` raises `ValueError`
-  (it entered at market without breakeven). Also through
-  `simulate_trades_hires`. Other mode-specific options are still ignored
-  outside their mode (e.g. `trail_activation_r` with `"rr"`). An unknown
-  `exit_mode` now raises also when there are no signals.
+  (9.5 months). BG-06 passes at 12 months less 1 week (11.75): a calendar
+  year of FX data starts after the New Year close and ends on the last
+  Friday, so it measures 11.86–11.99 months (EURUSD and XAUUSD 1h,
+  2022–2024) and would fail a strict 12. Periods are shown with two
+  decimals, and a failure on the estimate says to pass the bar times.
+- **`simulate_trades` raises on options of another exit mode.** Each mode
+  ignored the others' options: a non-zero `be_trigger_pct`, `retrace_pct` or
+  `retrace_timeout` outside `"rr"` entered at market without breakeven, a
+  non-zero `trail_activation_r` / `trail_distance_r` outside `"trailing"`
+  (e.g. with the default `"rr"`) gave fixed SL/TP exits, and `exit_signals`
+  outside `"custom"` or `sar_values` outside `"sar_trailing"` were unused.
+  These now raise `ValueError`, also through `simulate_trades_hires`. An
+  unknown `exit_mode` now raises also when there are no signals.
 - **The audit no longer passes a file it tested only half of.** A file with
   only `signals()` or only `backtest()` gets a `warn` for the missing test
   (`details["not_run"]`, and a summary of what was not tested) instead of an

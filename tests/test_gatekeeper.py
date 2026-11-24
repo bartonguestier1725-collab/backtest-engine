@@ -167,7 +167,7 @@ class TestGate0TradeChecks:
         # The message says the period came from ts, not from n_bars
         with pytest.raises(RuntimeError, match="Gate 0 FAILED"):
             gk.gate0_validate(trades=trades, timestamps=ts)
-        assert "SHORT PERIOD: 6.8 months (from the first and last bar times)" in capsys.readouterr().out
+        assert "SHORT PERIOD: 6.84 months (from the first and last bar times)" in capsys.readouterr().out
 
     def test_empty_timestamps_reported(self, capsys):
         GateKeeper(strategy_name="t", bar_minutes=60).gate0_validate(timestamps=np.array([]))

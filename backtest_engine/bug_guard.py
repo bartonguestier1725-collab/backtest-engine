@@ -308,15 +308,27 @@ def _period_months(n_bars: int, bar_minutes: int, start_ts=None, end_ts=None) ->
     return months, f"estimated from {n_bars} bars × {bar_minutes}min at FX hours"
 
 
-def _period_result(total_months: float, basis: str, min_months: int) -> CheckResult:
-    if total_months < min_months:
+# About a week: a calendar year of FX data starts after the New Year close
+# and ends on the last Friday, so it measures 11.86-11.99 months (EURUSD and
+# XAUUSD 1h, 2022-2024). The slack lets a full year pass.
+_PERIOD_SLACK_MONTHS = 0.25
+
+
+def _period_result(total_months: float, basis: str, min_months: int,
+                   estimated: bool = False) -> CheckResult:
+    floor = min_months - _PERIOD_SLACK_MONTHS
+    if total_months < floor:
+        hint = (" The period was estimated at FX hours; pass the bar times "
+                "(timestamps= to bug_guard()/gate0_validate(), or start_ts/end_ts "
+                "to check_data_period()) to measure it exactly." if estimated else "")
         return CheckResult(
             "BG-06", False,
-            f"SHORT PERIOD: {total_months:.1f} months ({basis}). "
-            f"Minimum {min_months} months required. Results will be overfitted.",
+            f"SHORT PERIOD: {total_months:.2f} months ({basis}). "
+            f"Minimum {min_months} months less 1 week ({floor:.2f}) required. "
+            f"Results will be overfitted.{hint}",
         )
     return CheckResult("BG-06", True,
-                       f"Data period: {total_months:.1f} months (>={min_months}, {basis})")
+                       f"Data period: {total_months:.2f} months (>={floor:.2f}, {basis})")
 
 
 def check_data_period(
@@ -328,6 +340,10 @@ def check_data_period(
 ) -> CheckResult:
     """BG-06: Verify sufficient data period to avoid short-period overfitting.
 
+    Passes at ``min_months`` less 1 week (11.75 for 12), so that a calendar
+    year of FX data, which starts and ends at a weekend or holiday close,
+    passes.
+
     If start_ts/end_ts are provided (the first and last bar open times: Unix
     seconds like the rest of the library, pd.Timestamp, datetime64 or
     datetime), uses the calendar period up to the last bar's close.
@@ -338,7 +354,9 @@ def check_data_period(
     market open every day (crypto, 30.4 days a month) reads about 1.4× too
     long, so pass the dates for those.
     """
-    return _period_result(*_period_months(n_bars, bar_minutes, start_ts, end_ts), min_months)
+    estimated = start_ts is None or end_ts is None
+    return _period_result(*_period_months(n_bars, bar_minutes, start_ts, end_ts), min_months,
+                          estimated=estimated)
 
 
 def check_expanding_quantile(source_path: str | Path) -> CheckResult:

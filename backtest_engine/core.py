@@ -913,9 +913,11 @@ def simulate_trades(
                as the first; with close or limit entry the first is the next bar.
     exit_mode : "rr" (fixed RR), "trailing", "custom", or "sar_trailing".
     be_trigger_pct : Fraction of TP distance that triggers breakeven (0=disabled).
-                     ``be_trigger_pct``, ``retrace_pct`` and ``retrace_timeout``
-                     work with exit_mode="rr" only; other modes raise if they
-                     are not 0.
+                     Each mode's options (``be_trigger_pct``, ``retrace_pct``,
+                     ``retrace_timeout`` for "rr"; ``trail_*`` for "trailing";
+                     ``exit_signals`` for "custom"; ``sar_values`` for
+                     "sar_trailing") raise ValueError with another mode unless
+                     left at 0 / None.
     retrace_pct : Fraction of TP distance for limit entry (0=market order).
                   The limit is placed this far from close[sig_bar]; SL/TP are
                   measured from the limit (fill) price. On the fill bar only
@@ -994,17 +996,22 @@ def simulate_trades(
         raise ValueError("max_hold must be >= 1 (bars a trade may be held)")
     if exit_mode not in ("rr", "trailing", "custom", "sar_trailing"):
         raise ValueError(f"Unknown exit_mode: {exit_mode!r}. Use 'rr', 'trailing', 'sar_trailing', or 'custom'.")
-    if exit_mode != "rr":
-        # Only the rr kernel reads these; other modes would ignore them and
-        # silently return market entries without breakeven.
-        rr_only = [name for name, v in (("be_trigger_pct", be_trigger_pct),
-                                        ("retrace_pct", retrace_pct),
-                                        ("retrace_timeout", retrace_timeout)) if v]
-        if rr_only:
+    # Each kernel reads only its own mode's options; another mode would
+    # ignore them silently (e.g. trailing params with the default "rr").
+    for name, value, mode in (
+        ("be_trigger_pct", be_trigger_pct, "rr"),
+        ("retrace_pct", retrace_pct, "rr"),
+        ("retrace_timeout", retrace_timeout, "rr"),
+        ("trail_activation_r", trail_activation_r, "trailing"),
+        ("trail_distance_r", trail_distance_r, "trailing"),
+        ("exit_signals", exit_signals is not None, "custom"),
+        ("sar_values", sar_values is not None, "sar_trailing"),
+    ):
+        if value and exit_mode != mode:
             raise ValueError(
-                f"{', '.join(rr_only)} only work with exit_mode='rr'; "
-                f"exit_mode={exit_mode!r} would ignore them. Leave them at 0 "
-                f"or use exit_mode='rr'."
+                f"{name} only works with exit_mode={mode!r}; exit_mode={exit_mode!r} "
+                f"would ignore it. Leave it at its default (0 or None) or use "
+                f"exit_mode={mode!r}."
             )
 
     if open_prices is not None:

@@ -299,18 +299,39 @@ class TestCustomMode:
 # ── Validation Tests ─────────────────────────────────────────────────────────
 
 class TestValidation:
-    @pytest.mark.parametrize("mode,extra", [
-        ("trailing", {"trail_activation_r": 1.0, "trail_distance_r": 0.5}),
-        ("custom", {"exit_signals": np.zeros(100, dtype=bool)}),
-        ("sar_trailing", {"sar_values": np.full(100, 90.0)}),
-    ])
-    @pytest.mark.parametrize("opt", ["be_trigger_pct", "retrace_pct", "retrace_timeout"])
-    def test_rr_only_options_raise_in_other_modes(self, simple_uptrend, mode, extra, opt):
-        """v0.6.1: these were silently ignored outside exit_mode='rr'."""
+    _MODE_EXTRA = {
+        "rr": {},
+        "trailing": {"trail_activation_r": 1.0, "trail_distance_r": 0.5},
+        "custom": {"exit_signals": np.zeros(100, dtype=bool)},
+        "sar_trailing": {"sar_values": np.full(100, 90.0)},
+    }
+    _OPTION_MODE = {
+        "be_trigger_pct": ("rr", 0.5), "retrace_pct": ("rr", 0.5), "retrace_timeout": ("rr", 3),
+        "trail_activation_r": ("trailing", 1.0), "trail_distance_r": ("trailing", 0.5),
+        "exit_signals": ("custom", np.zeros(100, dtype=bool)),
+        "sar_values": ("sar_trailing", np.full(100, 90.0)),
+    }
+
+    @pytest.mark.parametrize("mode", ["rr", "trailing", "custom", "sar_trailing"])
+    @pytest.mark.parametrize("opt", list(_OPTION_MODE))
+    def test_options_of_another_mode_raise(self, simple_uptrend, mode, opt):
+        """v0.6.1: each mode ignored the others' options silently (e.g.
+        trail_activation_r with the default exit_mode="rr")."""
+        own, value = self._OPTION_MODE[opt]
+        if own == mode:
+            pytest.skip("the option's own mode")
         high, low, close = simple_uptrend
-        with pytest.raises(ValueError, match=f"{opt} only work with exit_mode='rr'"):
-            _single_trade(high, low, close, LONG, 5.0, 10.0, 10,
-                          exit_mode=mode, **{opt: 0.5 if opt != "retrace_timeout" else 3}, **extra)
+        kw = {**self._MODE_EXTRA[mode], opt: value}
+        with pytest.raises(ValueError, match=f"{opt} only works with exit_mode='{own}'"):
+            _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode=mode, **kw)
+
+    @pytest.mark.parametrize("mode", ["rr", "trailing", "custom", "sar_trailing"])
+    def test_own_options_and_defaults_are_fine(self, simple_uptrend, mode):
+        high, low, close = simple_uptrend
+        r = _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode=mode,
+                          be_trigger_pct=0.0, retrace_pct=0.0, retrace_timeout=0,
+                          **self._MODE_EXTRA[mode])
+        assert len(r) == 1
 
     def test_unknown_mode_with_rr_option_names_the_mode(self, simple_uptrend):
         high, low, close = simple_uptrend
@@ -324,13 +345,6 @@ class TestValidation:
         with pytest.raises(ValueError, match="Unknown exit_mode"):
             simulate_trades(high, low, close, e, e.astype(np.int8), e.astype(float),
                             e.astype(float), max_hold=10, exit_mode="RR")
-
-    def test_rr_only_options_at_zero_are_fine(self, simple_uptrend):
-        high, low, close = simple_uptrend
-        r = _single_trade(high, low, close, LONG, 5.0, 10.0, 10, exit_mode="trailing",
-                          trail_activation_r=1.0, trail_distance_r=0.5,
-                          be_trigger_pct=0.0, retrace_pct=0.0, retrace_timeout=0)
-        assert len(r) == 1
 
     def test_mismatched_lengths_raises(self, simple_uptrend):
         high, low, close = simple_uptrend

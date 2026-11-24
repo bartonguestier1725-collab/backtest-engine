@@ -105,7 +105,7 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 - open_prices を渡さないときは、損切り値・終値で約定する（窓開けは分からない）
 - 利確は利確値で約定する（窓を開けても有利な値にしない）
 - 指値エントリー（`retrace_pct`）のSL/TPは約定値から測る
-- `retrace_pct`・`retrace_timeout`・`be_trigger_pct` は exit_mode="rr" だけ。他のモードで0以外を渡すとエラー（v0.6.1。それまでは黙って無視していた）
+- モード専用の引数（rr の `retrace_pct`・`retrace_timeout`・`be_trigger_pct`、trailing の `trail_activation_r`・`trail_distance_r`、custom の `exit_signals`、sar_trailing の `sar_values`）を他のモードで渡すとエラー（v0.6.1。それまでは黙って無視していた）
 - 約定しなかった行（NO_FILL）は、勝率・期待値・幾何平均・Sharpe・Sortino に数えない（v0.6.1）。MonteCarloDD・StressTest には `results.filled["pnl_r"]` を渡す
 - max_hold は保有する本数。始値エントリーはエントリーの足が1本目
 

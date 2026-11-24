@@ -430,7 +430,7 @@ class TestDataPeriodCalendar:
         from backtest_engine.bug_guard import check_data_period
         # 2021-01-01 .. 2024-01-01 in Unix seconds (the library's time unit)
         r = check_data_period(100, 60, start_ts=np.int64(1609459200), end_ts=np.int64(1704067200))
-        assert r.passed and "36.0 months" in r.message
+        assert r.passed and "35.97 months" in r.message
 
     def test_timestamp_objects(self):
         import pandas as pd
@@ -469,7 +469,7 @@ class TestDataPeriodInputs:
         from backtest_engine.bug_guard import check_data_period
         r = check_data_period(100, 60, start_ts=1609459200,
                               end_ts=pd.Timestamp("2024-01-01", tz="UTC"))
-        assert r.passed and "36.0 months" in r.message
+        assert r.passed and "35.97 months" in r.message
 
 
 class TestDataPeriodFromTimestamps:
@@ -482,11 +482,33 @@ class TestDataPeriodFromTimestamps:
 
     def test_estimate_is_528_bars_a_month(self):
         from backtest_engine.bug_guard import check_data_period
-        assert "12.0 months" in check_data_period(528 * 12, 60).message
+        assert "12.00 months" in check_data_period(528 * 12, 60).message
         assert check_data_period(528 * 12, 60).passed
         # 8.7 months of real FX 1h bars (~519/month) passed the old 374/month
         # estimate as 12.1 months
         assert not check_data_period(4520, 60).passed
+
+    def test_one_week_of_slack(self):
+        """A calendar year of FX starts after the New Year close and ends on
+        the last Friday: EURUSD 1h 2024 is 2024-01-01 22:00 to 2024-12-31 21:00."""
+        from backtest_engine.bug_guard import check_data_period
+        r = check_data_period(6240, 60, start_ts=pd.Timestamp("2024-01-01 22:00"),
+                              end_ts=pd.Timestamp("2024-12-31 21:00"))
+        assert r.passed and "11.99 months (>=11.75" in r.message
+        year_2022 = check_data_period(6216, 60, start_ts=pd.Timestamp("2022-01-02 22:00"),
+                                      end_ts=pd.Timestamp("2022-12-30 21:00"))
+        assert year_2022.passed and "11.89 months" in year_2022.message
+        t0 = 1609459200
+        assert check_data_period(1, 60, start_ts=t0, end_ts=t0 + int(11.76 * 30.44 * 86400)).passed
+        assert not check_data_period(1, 60, start_ts=t0, end_ts=t0 + int(11.74 * 30.44 * 86400)).passed
+
+    def test_estimate_failure_says_to_pass_timestamps(self):
+        from backtest_engine.bug_guard import check_data_period
+        r = check_data_period(4520, 60)
+        assert not r.passed and "8.56 months" in r.message and "pass the bar times" in r.message
+        ts = 1609459200 + 3600 * np.arange(3000, dtype=np.int64)
+        (r,) = self._bg06(timestamps=ts)
+        assert not r.passed and "pass the bar times" not in r.message
 
     def test_timestamps_override_bar_count(self):
         ts = 1609459200 + 3600 * np.arange(6 * 520, dtype=np.int64)  # ~4.3 months
@@ -496,7 +518,7 @@ class TestDataPeriodFromTimestamps:
     def test_timestamps_alone_run_bg06(self):
         ts = np.linspace(1609459200, 1609459200 + 400 * 86400, 1000).astype(np.int64)
         (r,) = self._bg06(timestamps=ts)
-        assert r.passed and "13.1 months" in r.message
+        assert r.passed and "13.14 months" in r.message
 
     def test_millisecond_timestamps_are_an_error(self):
         ts = (1609459200 + 3600 * np.arange(100, dtype=np.int64)) * 1000
@@ -511,7 +533,7 @@ class TestDataPeriodFromTimestamps:
         ts = 1609459200 + 3600 * np.arange(10 * 8760, dtype=np.int64)  # 10 years
         (r,) = self._bg06(n_bars=1500, bar_minutes=60, timestamps=ts)
         assert not r.passed and r.severity == "ERROR"
-        assert "SHORT PERIOD: 2.1 months" in r.message and "1500/87600" in r.message
+        assert "SHORT PERIOD: 2.05 months" in r.message and "1500/87600" in r.message
 
     def test_off_by_one_is_a_warn_in_any_market(self):
         """Scaling, not the FX estimate: 3 years of stock hours (7 bars a
@@ -519,7 +541,7 @@ class TestDataPeriodFromTimestamps:
         days = pd.bdate_range("2021-01-04", "2023-12-29")
         ts = np.array([int(d.timestamp()) + 3600 * (14 + h) for d in days for h in range(7)])
         (r,) = self._bg06(n_bars=len(ts) - 1, bar_minutes=60, timestamps=ts)
-        assert not r.passed and r.severity == "WARN" and "35.8 months" in r.message
+        assert not r.passed and r.severity == "WARN" and "35.78 months" in r.message
 
     def test_short_calendar_and_fewer_bars_is_error(self):
         ts = 1609459200 + 3600 * np.arange(3000, dtype=np.int64)  # ~4 months
