@@ -226,7 +226,7 @@ report = bug_guard(
     signal_bars=f["signal_bar"],
     entry_bars=f["entry_bar"],
     exit_bars=f["exit_bar"],
-    spreads_used={"USDJPY": 0.017, "EURUSD": 0.000075},
+    spreads_used={"USDJPY": 0.014, "EURUSD": 0.00012},  # costs your backtest applied
     expected_costs=cost.cost_prices(),   # cost = BrokerCost(...) with your broker's numbers
     resolution_minutes=5,
     n_bars=len(close),
@@ -481,7 +481,7 @@ from backtest_engine import load_ohlcv, fetch_aggvault
 
 # Option 1: From CSV file (time column: date strings, or epoch seconds/milliseconds)
 timestamps, opens, highs, lows, closes, volume = load_ohlcv("data.csv")
-# Other column names, e.g. a platform export:
+# Other column names, e.g. a platform export (join separate date and time columns first):
 # load_ohlcv("broker.csv", time_col="Date", open_col="Open", high_col="High",
 #            low_col="Low", close_col="Close", volume_col="Volume")
 
@@ -492,7 +492,7 @@ timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
 )
 ```
 
-`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). The API key comes from the `AGGVAULT_KEY` environment variable (an `api_key=` parameter exists, but do not write the key into files).
+`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). The API key comes from the `AGGVAULT_KEY` environment variable (an `api_key=` parameter exists, but do not write the key into files other than `.env`).
 
 Fetch each symbol × timeframe × period once and save it (e.g. `np.savez` into `data/`, which is in `.gitignore`), then load the saved file. Do not fetch at the top level of a strategy file that the audit imports (put the fetch under `if __name__ == "__main__":`): the audit loads the file again on every run.
 

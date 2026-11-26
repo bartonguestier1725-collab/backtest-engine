@@ -17,7 +17,8 @@ do not change.
 - Removed an unused internal cost table from `bug_guard` (not used for
   validation since v0.4.0).
 - The missing-key error of `fetch_aggvault` names the environment variable
-  `AGGVAULT_KEY` first and says not to write the key into files.
+  `AGGVAULT_KEY` first, mentions `.env`, and says not to write the key into
+  other files.
 
 ### Docs
 

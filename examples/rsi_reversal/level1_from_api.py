@@ -9,7 +9,7 @@
 前提（README の Install のとおり）:
   git clone https://github.com/bartonguestier1725-collab/backtest-engine.git
   cd backtest-engine && uv sync
-  export AGGVAULT_KEY=tk_あなたのキー   # キーはファイルに書かない
+  export AGGVAULT_KEY=tk_あなたのキー   # キーは .env 以外のファイルに書かない
   uv run python examples/rsi_reversal/level1_from_api.py
 """
 
