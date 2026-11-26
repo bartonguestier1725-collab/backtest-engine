@@ -46,8 +46,8 @@ class TestBrokerCost:
 
 
 class TestPresets:
-    def test_tradeview_ilc(self):
-        bc = BrokerCost.tradeview_ilc()
+    def test_sample_ecn(self):
+        bc = BrokerCost.sample_ecn()
         assert "EURUSD" in bc.spreads
         assert bc.commission_per_lot == 5.0
         assert len(bc.spreads) == 29  # 27 FX pairs + EURCHF + XAUUSD
@@ -55,23 +55,38 @@ class TestPresets:
         cost = bc.cost_price("EURUSD")
         assert cost > 0.0
 
-    def test_fundora(self):
-        bc = BrokerCost.fundora()
+    def test_sample_wide_spread(self):
+        bc = BrokerCost.sample_wide_spread()
         assert "EURUSD" in bc.spreads
         assert bc.commission_per_lot == 0.0
         assert len(bc.spreads) == 29  # 27 FX pairs + EURCHF + XAUUSD
-        # Fundora spreads should be wider than Tradeview
-        tv = BrokerCost.tradeview_ilc()
-        assert bc.spreads["EURUSD"] > tv.spreads["EURUSD"]
+        # Wider spreads than the ECN sample
+        ecn = BrokerCost.sample_ecn()
+        assert bc.spreads["EURUSD"] > ecn.spreads["EURUSD"]
 
-    def test_fundora_eurchf_present(self):
-        """EURCHF should be in fundora cost model."""
-        bc = BrokerCost.fundora()
+    def test_sample_wide_spread_eurchf_present(self):
+        """EURCHF should be in the sample_wide_spread cost model."""
+        bc = BrokerCost.sample_wide_spread()
         assert "EURCHF" in bc.spreads
         assert bc.spreads["EURCHF"] == pytest.approx(0.00014)
 
+    def test_deprecated_preset_names(self):
+        """The pre-v0.6.2 preset names still work, warn, and return the same values."""
+        import warnings
+
+        for old, new in (("tradeview_ilc", BrokerCost.sample_ecn),
+                         ("fundora", BrokerCost.sample_wide_spread)):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                bc = getattr(BrokerCost, old)()
+            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(dep) == 1
+            assert new.__name__ in str(dep[0].message)
+            assert old not in str(dep[0].message)
+            assert bc == new()
+
     def test_jpy_pairs_have_correct_pip_size(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         assert bc.pip_sizes["USDJPY"] == 0.01
         assert bc.pip_sizes["EURJPY"] == 0.01
         assert bc.pip_sizes["EURUSD"] == 0.0001
@@ -79,7 +94,7 @@ class TestPresets:
 
 class TestCostPrices:
     def test_cost_prices_returns_all_instruments(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         prices = bc.cost_prices()
         assert len(prices) == len(bc.spreads)
         for inst in bc.spreads:
@@ -99,15 +114,15 @@ class TestCostPrices:
 
 class TestPipSize:
     def test_pip_size_eurusd(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         assert bc.pip_size("EURUSD") == pytest.approx(0.0001)
 
     def test_pip_size_usdjpy(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         assert bc.pip_size("USDJPY") == pytest.approx(0.01)
 
     def test_pip_size_xauusd(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         assert bc.pip_size("XAUUSD") == pytest.approx(0.01)
 
     def test_pip_size_unknown_defaults(self):
@@ -115,17 +130,17 @@ class TestPipSize:
         assert bc.pip_size("UNKNOWN") == pytest.approx(0.0001)
 
     def test_price_to_pips_eurusd(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         # 10 pips = 0.001 price diff
         assert bc.price_to_pips("EURUSD", 0.001) == pytest.approx(10.0)
 
     def test_price_to_pips_xauusd(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         # 250 pips = 2.50 price diff (pip_size=0.01)
         assert bc.price_to_pips("XAUUSD", 2.50) == pytest.approx(250.0)
 
     def test_price_to_pips_usdjpy(self):
-        bc = BrokerCost.tradeview_ilc()
+        bc = BrokerCost.sample_ecn()
         # 15 pips = 0.15 price diff
         assert bc.price_to_pips("USDJPY", 0.15) == pytest.approx(15.0)
 

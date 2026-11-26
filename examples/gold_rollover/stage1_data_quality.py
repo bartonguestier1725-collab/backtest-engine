@@ -186,4 +186,4 @@ for _, row in yearly.iterrows():
     print(f"  {row['year']}: {row['total_pips']:+8.1f} pips, n={row['n']}, WR={row['win_rate']:.0%}, MaxDD={row['max_dd']:,.1f} pips")
 
 print("\n" + "=" * 60)
-print("Done. Next: Stage 2 (add Tradeview ILC costs + swap)")
+print("Done.")

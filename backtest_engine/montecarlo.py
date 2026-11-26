@@ -205,7 +205,7 @@ class MonteCarloDD:
         """Deprecated: use prop_firm_check() instead."""
         import warnings
         warnings.warn(
-            "fundora_check() is deprecated, use prop_firm_check() instead.",
+            "This method is deprecated, use prop_firm_check() instead.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -1,23 +1,28 @@
 """BugGuard — Automated backtest bug detection.
 
-Every bug that has EVER occurred in our backtesting is encoded here as an
-automated check. This module MUST be used before reporting any backtest result.
+Each check looks for one bug that commonly makes a backtest look better than
+it is. Run it before reporting a backtest result.
 
-Incident log (why each check exists):
-  BG-01: Look-ahead bias — signal from bar[N], entry at bar[N] (2026-02-28 v1)
-  BG-02: Cost underestimation — JPY commission missing from cost model (2026-02-28)
-  BG-03: Commission one-way — $6 RT treated as $3 one-way (2026-02-17)
-  BG-04: bfill data leak — future values used to fill NaN (2026-02-28 v2)
-  BG-05: 1h OHLC phantom wins — SL/TP hit order unknown in bar (2026-02-28 v5)
-  BG-06: Short period overfitting — 48-day "champion" dead on 13.5mo (2026-02-28)
-  BG-07: ATR percentile leak — full-period quantile used (2026-02 earlier)
-  BG-08: Same-bar exit+reentry — enter at Open after seeing High/Low for exit (Codex)
-  BG-09: Entry at Close — should be Open of next bar (2026-02-28 v1 pre-fix)
+What each check finds:
+  BG-01: Look-ahead — entry on or before the signal bar
+  BG-02: Cost underestimation — declared costs below the expected costs
+         (e.g. a commission missing for JPY pairs)
+  BG-03: One-way commission — a round-trip commission halved (taken as per side)
+  BG-04: bfill data leak — future values used to fill NaN
+  BG-05: Coarse-bar SL/TP — the order of SL and TP inside a bar is unknown
+  BG-06: Short period — too few months of data to trust the best parameter set
+  BG-07: Full-period quantile — a percentile computed over the whole sample
+  BG-08: Same-bar exit+reentry — entering at the open after seeing the bar's
+         high/low for the exit
+  BG-09: Entry at close — should be the next bar's open
   BG-10: Incomplete bars — last bar still forming; unsorted/duplicate timestamps
-  BG-11: Spread/cost mismatch — published spread used instead of measured (2026-02-28)
+  BG-11: Spread/cost mismatch — a typical published spread used instead of
+         your broker's costs
   BG-12: Fixed cost with ATR-varying SL distances
   BG-13: Spread filter used live but not in the backtest
-  BG-14: Effectively no SL (2026-04-01 Gold Rollover)
+  BG-14: Effectively no SL
+
+BG-02, BG-03 and BG-11 are one check (``check_cost_registry``).
 
 Checks that need trade data (BG-01/06b/08/09b/12/14) only run when the trade
 arrays are passed. ``GateKeeper.gate0_validate(trades=...)`` does this.
@@ -35,74 +40,15 @@ from typing import Optional
 
 import numpy as np
 
-# ── Known-good cost registry (measured 2026-02) ────────────────────────────
 
-# Total round-trip cost in PIPS (spread + commission).
-# Source: actual trading, not published typical spreads.
-_FUNDORA_COST_PIPS = {
-    # Measured directly
-    "EURUSD": 0.75,   # spread 0.15 + commission 0.60
-    "USDJPY": 1.70,   # spread 0.80 + commission 0.90
-    "USDCHF": 1.24,   # spread 0.70 + commission 0.54
-    "XAUUSD": 46.0,   # spread 40.0 + commission 6.0
-    # Estimated: original spread + commission
-    # Commission: $6/lot RT → non-JPY = 0.6 pip, JPY = 0.9 pip
-    "GBPUSD": 1.40,   # spread ~0.8 + commission 0.60 (conservative)
-    "AUDUSD": 1.20,   # spread ~0.6 + commission 0.60
-    "NZDUSD": 1.40,   # spread ~0.8 + commission 0.60
-    "USDCAD": 1.40,   # spread ~0.8 + commission 0.60
-    "EURGBP": 1.40,   # spread ~0.8 + commission 0.60
-    "EURJPY": 2.50,   # spread ~1.6 + commission 0.90
-    "GBPJPY": 3.10,   # spread ~2.2 + commission 0.90
-    "AUDJPY": 2.50,   # spread ~1.6 + commission 0.90
-    "EURAUD": 1.80,   # spread ~1.2 + commission 0.60
-    "EURNZD": 2.40,   # spread ~1.8 + commission 0.60
-    "GBPAUD": 2.20,   # spread ~1.6 + commission 0.60
-    "GBPNZD": 2.80,   # spread ~2.2 + commission 0.60
-    "AUDNZD": 1.60,   # spread ~1.0 + commission 0.60
-    "AUDCAD": 1.60,   # spread ~1.0 + commission 0.60
-    "NZDCAD": 1.80,   # spread ~1.2 + commission 0.60
-    "EURCAD": 1.60,   # spread ~1.0 + commission 0.60
-    "GBPCAD": 1.80,   # spread ~1.2 + commission 0.60
-    "CADCHF": 1.60,   # spread ~1.0 + commission 0.60
-    "CADJPY": 2.50,   # spread ~1.6 + commission 0.90
-    "CHFJPY": 2.50,   # spread ~1.6 + commission 0.90
-    "NZDJPY": 2.50,   # spread ~1.6 + commission 0.90
-    "GBPCHF": 1.80,   # spread ~1.2 + commission 0.60
-    "AUDCHF": 1.60,   # spread ~1.0 + commission 0.60
-    "NZDCHF": 1.80,   # spread ~1.2 + commission 0.60
-    "EURCHF": 1.40,   # spread ~0.8 + commission 0.60
-}
+def _legacy_broker_expected_costs() -> dict[str, float]:
+    """expected_costs for the deprecated ``broker=`` argument.
 
-_PIP_SIZES = {}
-for _p in _FUNDORA_COST_PIPS:
-    if _p == "XAUUSD":
-        _PIP_SIZES[_p] = 0.01
-    elif _p.endswith("JPY"):
-        _PIP_SIZES[_p] = 0.01
-    else:
-        _PIP_SIZES[_p] = 0.0001
-
-
-def _cost_pips_to_price(pair: str) -> float:
-    """Convert known-good cost from pips to price units."""
-    pips = _FUNDORA_COST_PIPS.get(pair)
-    pip_size = _PIP_SIZES.get(pair, 0.0001)
-    if pips is None:
-        return 0.0
-    return pips * pip_size
-
-
-def _fundora_expected_costs() -> dict[str, float]:
-    """Build expected_costs dict for Fundora.
-
-    Delegates to ``BrokerCost.fundora().cost_prices()`` so that only one
-    cost registry exists.  The legacy ``_FUNDORA_COST_PIPS`` dict is kept
-    for reference but is no longer used in validation.
+    The same values as ``BrokerCost.sample_wide_spread().cost_prices()``.
     """
     from backtest_engine.costs import BrokerCost
 
-    return BrokerCost.fundora().cost_prices()
+    return BrokerCost.sample_wide_spread().cost_prices()
 
 
 # ── Check results ──────────────────────────────────────────────────────────
@@ -185,7 +131,8 @@ def check_cost_registry(
 ) -> CheckResult:
     """BG-02/03/11: Verify costs match expected values.
 
-    Catches: JPY commission missing, one-way commission, published spread used.
+    Catches: JPY commission missing, one-way commission, a typical published
+    spread used instead of your broker's costs.
 
     Parameters
     ----------
@@ -729,13 +676,14 @@ def run_all_checks(
     if "broker" in kwargs:
         warnings.warn(
             "broker parameter is deprecated. "
-            "Use expected_costs=BrokerCost.fundora().cost_prices() instead.",
+            "Use expected_costs=BrokerCost(...).cost_prices() with your own "
+            "costs (sample values: BrokerCost.sample_wide_spread()).",
             DeprecationWarning,
             stacklevel=2,
         )
         broker = kwargs.pop("broker")
         if expected_costs is None and broker == "fundora":
-            expected_costs = _fundora_expected_costs()
+            expected_costs = _legacy_broker_expected_costs()
     if kwargs:
         raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
 

@@ -1,26 +1,31 @@
 """Example: Full GateKeeper pipeline (Gate 0–4).
 
 Demonstrates how a new user would validate a strategy through the 5 gates.
-Gates run in order and the pipeline stops at the first failed gate. On this
-synthetic random-walk data (no real edge) it stops at Gate 3, which is the
-point: the gates exist to kill strategies like this early.
+Gates run in order and the pipeline stops at the first failed gate. The
+synthetic data is a random walk with a small upward drift, which long trades
+of a trend-following rule profit from. With the relaxed demo thresholds below
+it passes Gates 0-3 and stops at Gate 4: at 1% risk per trade, thousands of
+trades reach a drawdown above the 20% limit.
 
 NOTE: This example lowers Gate 2 thresholds for demonstration purposes.
       With real data, always use the default thresholds or stricter.
 
+The backtests are GROSS (no costs): the gates ask whether an edge exists.
+Whether it survives your broker's costs is a later step (BrokerCost).
+
 The GateKeeper kills bad strategies fast:
-  Gate 0 (1 min)  — BugGuard: data quality + code bug detection
-  Gate 1 (5 min)  — Quick feasibility: ~20 param combos, PF >= 1.05?
-  Gate 2 (20 min) — Coarse screen: ~100 combos, one combo with PF >= 1.10 and RF >= 1.5?
-  Gate 3 (30 min) — WFA + CSCV: overfitting detection
-  Gate 4 (5 min)  — Monte Carlo: drawdown resilience
+  Gate 0 — BugGuard: data quality + code bug detection
+  Gate 1 — Quick feasibility: ~20 param combos, PF >= 1.05?
+  Gate 2 — Coarse screen: ~100 combos, one combo with PF >= 1.10 and RF >= 1.5?
+  Gate 3 — WFA + CSCV: overfitting detection
+  Gate 4 — Monte Carlo: drawdown resilience
 """
 
 import numpy as np
 
 from backtest_engine import (
     simulate_trades, LONG, SHORT,
-    sma, atr, BrokerCost, MonteCarloDD, StressTest,
+    sma, atr, MonteCarloDD, StressTest,
     WalkForward, CSCV, GateKeeper,
 )
 
@@ -61,7 +66,6 @@ def find_signals(close, fast_period=10, slow_period=50):
 
 HIGH, LOW, CLOSE, OPEN = generate_data()
 ATR_VALS = atr(HIGH, LOW, CLOSE, 14)
-COST_MODEL = BrokerCost.tradeview_ilc()
 
 
 def run_func(params):
@@ -77,12 +81,10 @@ def run_func(params):
 
     sl = ATR_VALS[sig] * atr_mult
     tp = sl * rr_ratio
-    instruments = ["EURUSD"] * len(sig)
-    costs = COST_MODEL.per_trade_cost(instruments, sl)
 
-    results = simulate_trades(
+    results = simulate_trades(   # GROSS: no entry_costs
         HIGH, LOW, CLOSE, sig, dirs, sl, tp,
-        max_hold=100, open_prices=OPEN, entry_costs=costs, preflight=False,
+        max_hold=100, open_prices=OPEN, preflight=False,
     )
     if len(results) == 0:
         return None
@@ -104,9 +106,9 @@ def main():
         n_bars=len(CLOSE),
         bar_minutes=5,           # the synthetic bars stand for 5m bars
         resolution_minutes=5,
-        spreads_used=COST_MODEL.cost_prices(),
-        expected_costs=COST_MODEL.cost_prices(),
         source_path=__file__,
+        # GROSS: no spreads_used / expected_costs (GK-00 lists spreads_used as
+        # missing; for a GROSS backtest that is expected)
     )
     # Relax thresholds for demo (SMA crossover on synthetic data is weak)
     # With real strategies, always use the defaults or stricter values
@@ -121,7 +123,7 @@ def main():
     sl = ATR_VALS[sig] * 1.5
     baseline = simulate_trades(
         HIGH, LOW, CLOSE, sig, dirs, sl, sl * 2.0, max_hold=100, open_prices=OPEN,
-        entry_costs=COST_MODEL.per_trade_cost(["EURUSD"] * len(sig), sl), preflight=False,
+        preflight=False,
     )
     # Bar times of the synthetic 5m bars: 300,000 bars = 2.9 years. BG-06 takes
     # the data period from them (as 1m bars this would be 7 months: too short).
@@ -162,12 +164,10 @@ def main():
             return 0.0
         sl = ATR_VALS[start:end][sig] * params.get("atr_mult", 1.5)
         tp = sl * params.get("rr_ratio", 2.0)
-        instruments = ["EURUSD"] * len(sig)
-        costs = COST_MODEL.per_trade_cost(instruments, sl)
         r = simulate_trades(
             HIGH[start:end], LOW[start:end], CLOSE[start:end],
             sig, dirs, sl, tp, max_hold=100,
-            open_prices=OPEN[start:end], entry_costs=costs, preflight=False,
+            open_prices=OPEN[start:end], preflight=False,
         )
         return float(np.mean(r["pnl_r"])) if len(r) > 0 else 0.0
 
@@ -194,11 +194,9 @@ def main():
     sig, dirs = find_signals(CLOSE, best.get("fast", 10), best.get("slow", 50))
     sl = ATR_VALS[sig] * best.get("atr_mult", 1.5)
     tp = sl * best.get("rr_ratio", 2.0)
-    instruments = ["EURUSD"] * len(sig)
-    costs = COST_MODEL.per_trade_cost(instruments, sl)
     results = simulate_trades(
         HIGH, LOW, CLOSE, sig, dirs, sl, tp,
-        max_hold=100, open_prices=OPEN, entry_costs=costs, preflight=False,
+        max_hold=100, open_prices=OPEN, preflight=False,
     )
 
     mc = MonteCarloDD(results.filled["pnl_r"], n_sims=10_000, risk_pct=0.01, seed=42)

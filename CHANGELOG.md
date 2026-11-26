@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.6.2
+
+Documentation, names and instructions for AI assistants. Simulation results
+do not change.
+
+### Changed
+
+- **The `BrokerCost` presets have new names:** `BrokerCost.sample_ecn()` and
+  `BrokerCost.sample_wide_spread()`, documented as sample values to replace
+  with your own broker's numbers. The old names still work and return the
+  same values, with a `DeprecationWarning` naming the new one.
+- The deprecated `broker=` argument of `run_all_checks` / `GateKeeper` and
+  the deprecated prop-firm check method of `MonteCarloDD` still work; their
+  warnings point to `BrokerCost(...).cost_prices()` and `prop_firm_check()`.
+- Removed an unused internal cost table from `bug_guard` (not used for
+  validation since v0.4.0).
+- The missing-key error of `fetch_aggvault` names the environment variable
+  `AGGVAULT_KEY` first and says not to write the key into files.
+
+### Docs
+
+- CLAUDE.md, AGENTS.md: test GROSS first; when a user asks whether an edge
+  survives their costs, ask for their spread, commission and slippage and
+  report the result as NET (do not refuse). Signals come from AggVault data;
+  the user's own broker data may be used for fills and cost checks, with its
+  times aligned to UTC bar opens. After Gate 3, propose checking the result
+  at the user's broker. Keep the key in `AGGVAULT_KEY`, never in a file;
+  fetch each range once and save it, not at the top level of a strategy file
+  the audit imports; do not edit the engine to test a strategy. AGENTS.md now
+  carries all of these, the max-DD reading and the install/update steps.
+- README: a pointer to AGENTS.md / CLAUDE.md at the top; one install path
+  (`uv sync`) and how to update (`git pull`, `uv sync`); how to keep the key;
+  the cost examples pass your own `BrokerCost(...)`; aligning other data to
+  UTC bar opens; the PBO comment follows Gate 3 (fails above 0.40); fetch
+  times are given as "a few minutes" / "under a minute".
+- Examples: `gatekeeper_pipeline.py` runs GROSS (it now passes Gates 0-3 and
+  stops at Gate 4; its docstring says so) and drops the unmeasured per-gate
+  times; `example_strategy.py` passes example costs through the constructor;
+  `level1_from_api.py` follows the README install steps.
+
 ## v0.6.1
 
 Fixes found in a clean-clone check of v0.6.0. Fills and `pnl_r` do not
@@ -129,7 +169,7 @@ with v0.5.x before relying on them.
   before the 1h close that produced the signal was known). Trades now enter at
   the open of the first execution bar at or after the signal bar's close.
   Measured on EURUSD 2024, RSI(14) 30/70, SL 2×ATR / TP 4×ATR, 696 trades,
-  NET with Tradeview ILC costs: PF 0.525 before, 0.908 after (1h fills: 0.909).
+  NET with the sample ECN cost preset: PF 0.525 before, 0.908 after (1h fills: 0.909).
   The README claim "1h-only PF 0.90 vs hires 0.53, a 41% overestimate" was an
   artifact of this bug and has been removed. The old test that fixed the old
   mapping (`test_signal_bar_mapping_correct`) now asserts the corrected one.
@@ -345,7 +385,7 @@ version was not recorded at the time.
 - **FX pair count display** — README/CHANGELOG corrected from "29 pairs + XAUUSD" to "29 pairs (28 FX + XAUUSD)".
 - **BG-13 false PASS** — `check_spread_filter(max_spread=0.0002)` without `signal_spreads` returned PASS ("No constraint to check"). Now returns WARN ("signal_spreads not provided").
 - **Input validation gaps** — `simulate_trades()` now rejects `signal_bars` out of range, `sl_distances <= 0`, and `NaN` in `close` with clear `ValueError` messages. Previously these caused garbage output, `ZeroDivisionError`, or silent NaN propagation.
-- **Fundora cost registry mismatch** — `_fundora_expected_costs()` (used by deprecated `broker="fundora"` path) produced different values from `BrokerCost.fundora().cost_prices()` for 10/29 instruments. Now delegates to `BrokerCost.fundora().cost_prices()` so only one cost registry exists.
+- **Cost registry mismatch** — the expected costs of the deprecated `broker=` path differed from the no-commission sample preset's `cost_prices()` for 10/29 instruments. Now delegates to the preset (renamed `BrokerCost.sample_wide_spread()` in v0.6.2) so only one cost registry exists.
 
 ### Tests
 
@@ -375,7 +415,7 @@ None. All changes are backward-compatible with v0.2.0 code.
 - **BG-09b: `check_open_prices_provided()`** — warns when `open_prices` is not passed to `simulate_trades()`, flagging potential close-price entry bias.
 - **BG-12: `check_fixed_cost_usage()`** — warns when a single fixed cost is used with varying SL distances (CV > 10%), indicating per-trade costs should be used instead.
 - **BG-13: `check_spread_filter()`** — warns when backtest signals include spreads exceeding a max constraint, catching BT/LIVE cost parity violations.
-- **EURCHF** added to `BrokerCost.fundora()` preset (28 FX → 29 pairs incl. XAUUSD).
+- **EURCHF** added to the no-commission sample preset (renamed `BrokerCost.sample_wide_spread()` in v0.6.2; 28 FX → 29 pairs incl. XAUUSD).
 - **`is_oos_ratio_raw`** — new key in `WalkForward.run()` output with docstring noting upward bias from asymmetric split lengths. `is_oos_ratio` retained as backward-compat alias.
 
 ### Deprecations (with backward-compatible wrappers)
@@ -393,8 +433,8 @@ All deprecated APIs emit `DeprecationWarning` and continue to work.
 
 ### Breaking changes
 
-- `FUNDORA_COST_PIPS` and `cost_pips_to_price` removed from public API (`__all__`).
-  Access via `bug_guard._FUNDORA_COST_PIPS` / `bug_guard._cost_pips_to_price` if needed.
+- The internal cost table and `cost_pips_to_price` removed from public API (`__all__`).
+  Both were removed from `bug_guard` in v0.6.2 (unused since v0.4.0).
 
 ### New features
 
@@ -408,9 +448,9 @@ All deprecated APIs emit `DeprecationWarning` and continue to work.
 
 ### Deprecations (with backward-compatible wrappers)
 
-- `MonteCarloDD.fundora_check()` — use `prop_firm_check()` instead.
-- `run_all_checks(broker="fundora")` — use `expected_costs=BrokerCost.fundora().cost_prices()`.
-- `GateKeeper(broker="fundora")` — use `expected_costs=BrokerCost.fundora().cost_prices()`.
+- The old prop-firm check method of `MonteCarloDD` — use `prop_firm_check()` instead.
+- `run_all_checks(broker=...)` — use `expected_costs=BrokerCost(...).cost_prices()`.
+- `GateKeeper(broker=...)` — use `expected_costs=BrokerCost(...).cost_prices()`.
 
 All deprecated APIs emit `DeprecationWarning` and continue to work.
 

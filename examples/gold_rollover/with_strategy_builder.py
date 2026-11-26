@@ -37,7 +37,7 @@ print("=" * 60)
 
 # ── Results ────────────────────────────────────────────────────────────
 if len(trades) > 0:
-    bc = BrokerCost.tradeview_ilc()
+    bc = BrokerCost(pip_sizes={"XAUUSD": 0.01})
     # BrokerCost uses 1 pip = $0.01 for XAUUSD, so these pips are 10x the
     # stage1_*.py figures, which use $0.10 to match the article.
     trades["pnl_price"] = trades["exit_price"] - trades["entry_price"]

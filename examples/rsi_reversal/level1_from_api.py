@@ -6,9 +6,11 @@
   3. シグナル: 1h足、約定シミュレーション: 1m足（正確なSL/TP判定）
   4. 結果: テクニカルエッジは存在するか？
 
-前提:
-  pip install git+ssh://git@github.com/bartonguestier1725-collab/backtest-engine.git
-  export AGGVAULT_KEY=tk_あなたのキー
+前提（README の Install のとおり）:
+  git clone https://github.com/bartonguestier1725-collab/backtest-engine.git
+  cd backtest-engine && uv sync
+  export AGGVAULT_KEY=tk_あなたのキー   # キーはファイルに書かない
+  uv run python examples/rsi_reversal/level1_from_api.py
 """
 
 import numpy as np
@@ -27,7 +29,7 @@ ts_1h, opens_1h, highs_1h, lows_1h, closes_1h, _ = fetch_aggvault(
 dt_index = pd.to_datetime(ts_1h, unit="s", utc=True)
 print(f"  1h: {len(ts_1h)} bars, {dt_index[0]} → {dt_index[-1]}")
 
-print("Fetching 1m data (execution, 2-3 min: 11 requests of 180 days)...")
+print("Fetching 1m data (execution, a few minutes: 11 requests of 180 days)...")
 ts_1m, opens_1m, highs_1m, lows_1m, closes_1m, _ = fetch_aggvault(
     "EURUSD", "1m", "2021-04-01", "2026-03-31",
 )

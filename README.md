@@ -2,6 +2,8 @@
 
 Numba JIT-accelerated trade simulator and validation toolkit.
 
+AI assistants: read [AGENTS.md](AGENTS.md) (Claude Code: [CLAUDE.md](CLAUDE.md)) before running a backtest.
+
 **What this is:** A fast bar-based trade simulator that takes OHLC data + pre-computed signals and evaluates each trade independently. Includes automated bug detection and stage-gate validation.
 
 **What this is not:** A portfolio backtester. There is no account balance tracking, multi-instrument position management, or order book simulation. If you need those, look at backtrader or vectorbt.
@@ -21,7 +23,7 @@ Numba JIT-accelerated trade simulator and validation toolkit.
 
 ### Opinionated modules (FX defaults, fully customizable)
 
-- **BrokerCost** — measured spread + commission model. Ships with FX presets (29 pairs (28 FX + XAUUSD)), but accepts any instrument via constructor. Supports per-trade cost arrays for variable-spread modeling
+- **BrokerCost** — spread + commission model for any instrument: pass your broker's numbers (sample FX values are included). Supports per-trade cost arrays for variable-spread modeling
 - **Strategy audit** (`python -m backtest_engine.audit my_strategy.py --json`) — finds look-ahead by behavior, not by reading code: rewrites the future and checks that past signals do not change, and runs the whole backtest on random walks where no edge can exist. JSON output for AI assistants. Measured on a labeled benchmark of 28 strategies ([bench/](bench/README.md))
 - **BugGuard** — 14 automated checks (BG-01–BG-14) for cost underestimation, fixed-cost misuse, spread filter violations, short data periods, bfill and full-period quantiles in the source, and more. The data period (BG-06) comes from the bar times when you pass `timestamps`; without them it is estimated from the bar count at FX hours, which is wrong for other markets. These are pattern and index checks: use the audit for look-ahead in signal code
 - **GateKeeper** — fast-kill pipeline (Gate 0–4) that eliminates hopeless strategies early. Gate 0: BugGuard (pass your simulation result so the trade-level checks run), Gate 1–2: PF/RF screening, Gate 3: WFA+CSCV overfitting, Gate 4: Monte Carlo DD. All thresholds are class variables — override them for your asset class
@@ -31,9 +33,13 @@ Numba JIT-accelerated trade simulator and validation toolkit.
 ```bash
 git clone https://github.com/bartonguestier1725-collab/backtest-engine.git
 cd backtest-engine
-uv venv .venv && source .venv/bin/activate
-uv pip install -e '.[dev]'
+uv sync                         # creates .venv and installs the engine and pytest
+uv run python my_strategy.py    # run everything with uv run
 ```
+
+To update: `git pull`, then `uv sync`.
+
+The AggVault API key goes in the environment variable `AGGVAULT_KEY` (`export AGGVAULT_KEY=tk_your_key`; if you keep it in a `.env` file, list that file in `.gitignore`). Do not write the key into strategy files, scripts or notebooks, and do not paste it into a chat or a question.
 
 > **Note:** NumPy is pinned to `numpy>=2.2,<2.4` to stay inside the range numba supports.
 
@@ -86,7 +92,7 @@ rsi_vals = rsi(c_1h, 14)
 atr_vals = atr(h_1h, l_1h, c_1h, 14)
 # ... generate signal_bars, directions, sl_distances, tp_distances
 
-# Execution on 1m (one year = 3 requests, ~30-40 s)
+# Execution on 1m (one year = 3 requests, under a minute)
 ts_1m, o_1m, h_1m, l_1m, c_1m, _ = fetch_aggvault("EURUSD", "1m", "2024-01-01", "2025-01-01")
 
 results = simulate_trades_hires(
@@ -105,7 +111,7 @@ results = simulate_trades_hires(
 | | 1h fills | 1m fills |
 |---|---|---|
 | GROSS | PF 0.959 | PF 0.958 |
-| NET (Tradeview ILC) | PF 0.909 | PF 0.908 |
+| NET (sample ECN cost) | PF 0.909 | PF 0.908 |
 
 For this strategy the two are close. The difference can be larger when SL/TP are small relative to the bar range, because more bars then touch both.
 
@@ -180,22 +186,18 @@ results = simulate_trades(..., preflight=False)
 
 ## Broker cost models
 
-BrokerCost works with any instrument. Pass your own spreads, commissions, and pip definitions.
+BrokerCost works with any instrument. Pass your own broker's spreads, commission and pip definitions.
 
 ```python
 from backtest_engine import BrokerCost
 
-# Custom broker — any instrument
+# Your broker's costs — any instrument
 cost = BrokerCost(
-    spreads={"EURUSD": 0.00008, "USDJPY": 0.008, "BTCUSD": 15.0},
-    commission_per_lot=4.0,
+    spreads={"EURUSD": 0.00008, "USDJPY": 0.008, "BTCUSD": 15.0},  # one-way, price units
+    commission_per_lot=4.0,                                         # round-trip per lot
     pip_values={"EURUSD": 10.0, "USDJPY": 6.67, "BTCUSD": 1.0},
     pip_sizes={"EURUSD": 0.0001, "USDJPY": 0.01, "BTCUSD": 1.0},
 )
-
-# FX presets (ships with 29 pairs (28 FX + XAUUSD), measured spreads)
-cost = BrokerCost.tradeview_ilc()   # ECN (tight spread + $5 RT commission)
-cost = BrokerCost.fundora()          # Prop firm (wider spread, no commission)
 
 # Per-trade cost — pass to simulate_trades() for accurate cost modeling
 instruments = ["EURUSD"] * len(sl_distances)
@@ -204,8 +206,10 @@ results = simulate_trades(..., entry_costs=cost_array)
 # results['pnl_r'] already has costs subtracted; results['cost_r'] shows each trade's cost
 
 # Get all costs as a dict (useful for BugGuard)
-expected = BrokerCost.tradeview_ilc().cost_prices()  # {"EURUSD": 0.00007, "USDJPY": 0.0105, ...}
+expected = cost.cost_prices()  # {"EURUSD": 0.00012, "USDJPY": 0.014, "BTCUSD": 19.0}
 ```
+
+Two sets of sample values for 29 pairs (28 FX + XAUUSD) are included: `BrokerCost.sample_ecn()` (tight spreads plus $5 round-trip commission) and `BrokerCost.sample_wide_spread()` (wider spreads, no commission). They are not any broker's quote; to see whether an edge survives your costs, use your own numbers.
 
 ## BugGuard
 
@@ -223,7 +227,7 @@ report = bug_guard(
     entry_bars=f["entry_bar"],
     exit_bars=f["exit_bar"],
     spreads_used={"USDJPY": 0.017, "EURUSD": 0.000075},
-    expected_costs=BrokerCost.tradeview_ilc().cost_prices(),
+    expected_costs=cost.cost_prices(),   # cost = BrokerCost(...) with your broker's numbers
     resolution_minutes=5,
     n_bars=len(close),
     n_trades=len(f),
@@ -300,7 +304,7 @@ gk = GateKeeper(
     resolution_minutes=1,          # fills simulated on 1m bars (simulate_trades_hires)
     spreads_used=spreads,
     source_path=__file__,
-    expected_costs=BrokerCost.tradeview_ilc().cost_prices(),
+    expected_costs=cost.cost_prices(),   # cost = BrokerCost(...) with your broker's numbers
 )
 
 # BugGuard + GK-00 input completeness. Pass a simulation result so the
@@ -463,7 +467,7 @@ print(f"OOS/IS ratio: {wf_result['is_oos_ratio']:.2f}")  # of window totals: ~0.
 # CSCV — Probability of Backtest Overfitting (Bailey 2015)
 cscv = CSCV(n_splits=10)
 cscv_result = cscv.run(param_grid, evaluate_fn, n_bars=len(close))
-print(f"PBO: {cscv_result['pbo']:.1%}")  # < 0.5 = probably not overfit
+print(f"PBO: {cscv_result['pbo']:.1%}")  # Gate 3 fails above 40% (GATE3_MAX_PBO = 0.40)
 ```
 
 `evaluate_fn(params, start_bar, end_bar)` must return the window's real metric, 0 for a window without trades. A placeholder such as -999 for "too few trades" is averaged into the WFA OOS mean and summed by CSCV, so PBO then ranks parameter sets by how often they trade (in `examples/rsi_reversal/level4_filters.py` it turned PBO 96% into 2%).
@@ -485,11 +489,13 @@ timestamps, opens, highs, lows, closes, volume = fetch_aggvault(
 )
 ```
 
-`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). API key via `api_key=` parameter or `AGGVAULT_KEY` environment variable.
+`fetch_aggvault` supports `1m`, `5m`, `15m`, `1h`, `4h`, `1d` timeframes and 29 symbols (major/minor/cross FX pairs + XAUUSD). Case-insensitive, slashes optional (`"eur/usd"` works). The API key comes from the `AGGVAULT_KEY` environment variable (an `api_key=` parameter exists, but do not write the key into files).
 
-The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes 2–3 minutes, mostly download time (the pacing alone is about a minute; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
+Fetch each symbol × timeframe × period once and save it (e.g. `np.savez` into `data/`, which is in `.gitignore`), then load the saved file. Do not fetch at the top level of a strategy file that the audit imports (put the fetch under `if __name__ == "__main__":`): the audit loads the file again on every run.
 
-All timestamps are bar open times in Unix seconds (UTC).
+The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes a few minutes, mostly download time (the pacing alone is about a minute; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
+
+All timestamps are bar open times in Unix seconds (UTC). When you use other data for fills (for example your broker's CSV with AggVault signals), align its times to UTC bar open times: broker exports are often in server time, and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error; signals and fills just stop lining up.
 
 ## HTML Report Generation
 
@@ -542,9 +548,8 @@ The following FX-specific defaults ship with the library. They are used by BugGu
 | Module | Default | How to override |
 |--------|---------|-----------------|
 | `BugGuard` | Without `timestamps`, the data period is estimated at FX hours (24 h × 22 days a month) | Pass `timestamps` to `bug_guard()` / `gate0_validate()` |
-| `BugGuard` | No cost registry: BG-02 is skipped (WARN) unless you pass `expected_costs` | `expected_costs=BrokerCost.tradeview_ilc().cost_prices()` |
+| `BugGuard` | No cost registry: BG-02 is skipped (WARN) unless you pass `expected_costs` | `expected_costs=BrokerCost(...).cost_prices()` with your broker's numbers |
 | `GateKeeper` | PF >= 1.05/1.10, RF >= 1.5, trades >= 30/50, PBO <= 0.40, MC pass >= 0.70 | Override class variables: `gk.GATE1_MIN_PF = 1.10` |
-| `BrokerCost` | `tradeview_ilc()`, `fundora()` presets | Use the constructor directly with your own spreads |
 
 ## Known limitations
 
@@ -555,7 +560,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Intra-bar SL/TP ordering** — Use `simulate_trades_hires()` to run signals on coarse bars but simulate execution on 1m bars. Without it, a bar that touches both SL and TP counts as SL.
 - **Stop gaps** — With `open_prices`, a stop that the market gaps through fills at the open (see [Fill rules](#fill-rules)).
 - **Cost underestimation** — BugGuard BG-02 compares the `spreads_used` you declare with `expected_costs` (pass both; it does not read `entry_costs`). Use `BrokerCost.per_trade_cost()` for per-trade costs, not fixed scalars.
-- **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate. The presets (`tradeview_ilc`, `fundora`) are already correct.
+- **One-way vs round-trip clarity** — `BrokerCost.spreads` is **one-way** bid-ask spread (pay once on entry). `commission_per_lot` is **round-trip** (e.g. $5 RT, not $2.50 per side). Getting these backwards doubles or halves your cost estimate.
 - **Short-period overfitting** — BugGuard BG-06 is an ERROR (Gate 0 raises) under 12 months less 1 week of data (11.75 months, so that a calendar year of FX passes: it starts after the New Year close and ends at the last close of the year), taken from the bar times you pass (or estimated from the bar count; see FX defaults). CSCV gives a formal PBO estimate.
 - **Timezone mixing** — All timestamps are Unix epoch (UTC). Strategy Builder converts a fixed UTC offset (`tz_offset_hours`, no daylight saving time).
 
@@ -563,8 +568,8 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Look-ahead the audit cannot see** — The [strategy audit](#strategy-audit) finds look-ahead that changes signals or creates an edge on random data. BugGuard only checks a few source patterns. Neither proves the absence of bias: a leak that never flips a signal, survivorship in the instrument list, and data errors are not covered. A strategy that looks too good usually has a leak.
 - **Portfolio effects** — Trades are simulated independently: no position overlap limits, margin, or account balance.
 - **Backtest-to-live gap** — Backtesting on aggregated multi-source data (e.g. AggVault median) gives cleaner signals than any single broker. A strategy that works on aggregated data may underperform on your broker's feed due to spread differences, requotes, and slippage. Always forward-test on your actual broker before going live.
-- **Slippage** — Not included in `BrokerCost` presets because it varies per user (colocation ≈ 0, retail ≈ 0.5-1+ pips). Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
-- **Variable spreads** — `BrokerCost` uses static measured spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
+- **Slippage** — Not included in the `BrokerCost` sample values because it varies per user (colocation ≈ 0, retail ≈ 0.5-1+ pips). Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
+- **Variable spreads** — `BrokerCost` uses static spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
 - **Swap/rollover costs** — Not modeled. For intraday strategies this is negligible. For multi-day holds, swap can erase thin edges.
 - **Execution latency** — The engine assumes instant fills at bar prices. In live trading, latency causes slippage, especially on fast moves.
 

@@ -887,33 +887,33 @@ class TestSARTrailingMode:
 
 # ── Cost Model Tests ───────────────────────────────────────────────────────
 
-class TestFundoraCost:
+class TestSampleWideSpreadCost:
     def test_xauusd_present(self):
-        """XAUUSD should be in fundora cost model."""
-        cost = BrokerCost.fundora()
+        """XAUUSD should be in the sample_wide_spread cost model."""
+        cost = BrokerCost.sample_wide_spread()
         assert "XAUUSD" in cost.spreads
 
     def test_xauusd_cost_roundtrip(self):
-        """XAUUSD total cost should be spread only (no commission in fundora)."""
-        cost = BrokerCost.fundora()
+        """XAUUSD total cost should be spread only (no commission in sample_wide_spread)."""
+        cost = BrokerCost.sample_wide_spread()
         total = cost.cost_price("XAUUSD")
-        # Fundora: spread=0.40, commission=0 → total=0.40
+        # sample_wide_spread: spread=0.40, commission=0 → total=0.40
         assert total == pytest.approx(0.40)
 
     def test_eurusd_cost_roundtrip(self):
         """EURUSD total cost should be spread only."""
-        cost = BrokerCost.fundora()
+        cost = BrokerCost.sample_wide_spread()
         total = cost.cost_price("EURUSD")
         assert total == pytest.approx(0.00010)
 
     def test_xauusd_pip_size(self):
         """XAUUSD pip_size should be 0.01."""
-        cost = BrokerCost.fundora()
+        cost = BrokerCost.sample_wide_spread()
         assert cost.pip_sizes["XAUUSD"] == pytest.approx(0.01)
 
     def test_xauusd_pip_value(self):
         """XAUUSD pip_value should be 1.0."""
-        cost = BrokerCost.fundora()
+        cost = BrokerCost.sample_wide_spread()
         assert cost.pip_values["XAUUSD"] == pytest.approx(1.0)
 
 

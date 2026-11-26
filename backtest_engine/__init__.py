@@ -1,6 +1,6 @@
 """Numba-accelerated backtesting engine for trading strategies."""
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 from backtest_engine._types import (
     LONG, SHORT,

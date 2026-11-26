@@ -82,12 +82,19 @@ def main():
     sl_distances = atr_vals[signal_bars] * 1.5  # 1.5 ATR SL
     tp_distances = atr_vals[signal_bars] * 3.0  # 3.0 ATR TP (2:1 RR)
 
-    # 5. Per-trade cost (ATR-varying SL → cost varies per trade)
-    cost_model = BrokerCost.tradeview_ilc()
+    # 5. Per-trade cost (ATR-varying SL → cost varies per trade).
+    #    Example values: use your own broker's spread and commission. On
+    #    AggVault data, test GROSS first (no entry_costs); costs are a later step.
+    cost_model = BrokerCost(
+        spreads={"EURUSD": 0.00002},   # one-way spread in price units (0.2 pips)
+        commission_per_lot=5.0,        # round-trip commission per standard lot
+        pip_values={"EURUSD": 10.0},   # account currency per pip per lot
+        pip_sizes={"EURUSD": 0.0001},
+    )
     instruments = ["EURUSD"] * len(signal_bars)
     cost_r_array = cost_model.per_trade_cost(instruments, sl_distances)
 
-    # 6. Simulate trades (Grade A: open_prices + entry_costs)
+    # 6. Simulate trades, NET (Grade A: open_prices; costs are not part of the grade)
     results = simulate_trades(
         high, low, close,
         signal_bars, directions, sl_distances, tp_distances,
@@ -103,7 +110,7 @@ def main():
 
     # 8. Analyze results using TradeResults convenience metrics
     pnl = results.filled["pnl_r"]  # NO_FILL rows are not trades
-    print(f"\n--- Trade Results (net of costs) ---")
+    print(f"\n--- Trade Results (NET: example costs) ---")
     print(f"Total trades: {results.n_filled}")
     print(f"Profit Factor: {results.profit_factor:.2f}")
     print(f"Win rate: {results.win_rate:.1%}")

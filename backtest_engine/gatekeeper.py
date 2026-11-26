@@ -15,7 +15,7 @@ Usage:
     from backtest_engine import GateKeeper
 
     gk = GateKeeper(
-        strategy_name="Currency Strength v6",
+        strategy_name="My Strategy",
         n_bars=len(close),     # bars of the signal timeframe
         bar_minutes=60,
         resolution_minutes=1,
@@ -55,7 +55,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from backtest_engine.bug_guard import run_all_checks, GuardReport, _fundora_expected_costs
+from backtest_engine.bug_guard import run_all_checks, GuardReport, _legacy_broker_expected_costs
 
 
 @dataclass
@@ -121,7 +121,7 @@ class GateKeeper:
             )
             broker = kwargs.pop("broker")
             if expected_costs is None and broker == "fundora":
-                expected_costs = _fundora_expected_costs()
+                expected_costs = _legacy_broker_expected_costs()
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
 

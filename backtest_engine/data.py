@@ -206,7 +206,7 @@ def fetch_aggvault(
     -----
     The server returns at most 500,000 bars per request. Long 1m/5m/15m
     ranges are fetched in several requests (1m: 180-day windows, paced to the
-    10 requests/minute limit). 5 years of 1m data takes 2-3 minutes, mostly
+    10 requests/minute limit). 5 years of 1m data takes a few minutes, mostly
     download time (the pacing alone is about a minute).
     A window with no bars inside the range emits a DataQualityWarning.
 
@@ -227,9 +227,10 @@ def fetch_aggvault(
     key = api_key or os.environ.get("AGGVAULT_KEY", "")
     if not key:
         raise ValueError(
-            "AggVault API key required.\n"
-            "  Option 1: pass api_key='tk_...'\n"
-            "  Option 2: export AGGVAULT_KEY=tk_your_key"
+            "AggVault API key required. Set the environment variable:\n"
+            "  export AGGVAULT_KEY=tk_your_key\n"
+            "(or keep it in a .env file listed in .gitignore). Do not write the "
+            "key into a strategy file, script or notebook."
         )
 
     valid_tf = {"1m", "5m", "15m", "1h", "4h", "1d"}

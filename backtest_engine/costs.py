@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -117,13 +118,16 @@ class BrokerCost:
         """
         return self.as_r_array(instruments, sl_distances)
 
-    # --- Presets ---
+    # --- Presets (sample values) ---
 
     @classmethod
-    def tradeview_ilc(cls) -> BrokerCost:
-        """Tradeview ILC account preset (ECN, $5 RT commission/lot).
+    def sample_ecn(cls) -> BrokerCost:
+        """Sample ECN-style costs: tight one-way spreads plus $5 round-trip
+        commission per lot, for 28 FX pairs and XAUUSD.
 
-        Spreads are one-way bid-ask (measured). Commission is $5 round-trip.
+        Sample values, not any broker's quote. Replace them with your own
+        broker's spreads and commission: ``BrokerCost(spreads=...,
+        commission_per_lot=..., pip_values=..., pip_sizes=...)``.
         """
         spreads = {
             "EURUSD": 0.00002, "GBPUSD": 0.00004, "USDJPY": 0.003,
@@ -159,8 +163,14 @@ class BrokerCost:
         )
 
     @classmethod
-    def fundora(cls) -> BrokerCost:
-        """Fundora prop firm preset (wider spreads, no commission)."""
+    def sample_wide_spread(cls) -> BrokerCost:
+        """Sample costs with wider one-way spreads and no commission, for
+        28 FX pairs and XAUUSD.
+
+        Sample values, not any broker's quote. Replace them with your own
+        broker's spreads and commission: ``BrokerCost(spreads=...,
+        commission_per_lot=..., pip_values=..., pip_sizes=...)``.
+        """
         spreads = {
             "EURUSD": 0.00010, "GBPUSD": 0.00014, "USDJPY": 0.012,
             "USDCHF": 0.00014, "AUDUSD": 0.00012, "NZDUSD": 0.00014,
@@ -193,3 +203,27 @@ class BrokerCost:
             pip_values=pip_values,
             pip_sizes=pip_sizes,
         )
+
+    # --- Deprecated preset names (v0.6.2): same values, warn ---
+
+    @classmethod
+    def tradeview_ilc(cls) -> BrokerCost:
+        """Deprecated name of :meth:`sample_ecn` (same values)."""
+        warnings.warn(
+            "This preset name is deprecated; use BrokerCost.sample_ecn() "
+            "(same values).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.sample_ecn()
+
+    @classmethod
+    def fundora(cls) -> BrokerCost:
+        """Deprecated name of :meth:`sample_wide_spread` (same values)."""
+        warnings.warn(
+            "This preset name is deprecated; use BrokerCost.sample_wide_spread() "
+            "(same values).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.sample_wide_spread()

@@ -229,7 +229,7 @@ if best_result is not None:
     print(f"    DD 99th: {mc.dd_percentile(99)*100:.1f}%")
     print(f"    Kelly:   {mc.kelly_fraction()*100:.1f}%")
 
-    # Prop firm check (Fintokei: 4% daily, 8% total)
+    # Prop firm check (e.g. 4% daily, 8% total)
     prop = mc.prop_firm_check(max_dd_limit=0.04, total_dd_limit=0.08, confidence=95.0)
     print(f"\n  Prop firm check (4%/8% DD limits):")
     print(f"    Pass: {prop['pass']}")

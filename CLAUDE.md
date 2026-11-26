@@ -14,6 +14,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
    - Gate 1・2: run_func が返す `n_trades` は `results.n_filled`（`len(results)` は約定しなかった行も数える）
    - Gate 3: WalkForward・CSCV に渡す evaluate_fn は、窓の中の本当の値（合計 R など）を返し、取引が無い窓は 0。-999 のような目印は使わない（WFA の平均と CSCV の順位がゆがむ）
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
+5. **自分のブローカーで再現するか**: Gate 3 を通ったら、次の段を提案する。① 会員のスプレッド・手数料・スリッページを聞いてコストを上乗せする（NET） ② 会員が用意した自分のブローカーのデータで回す ③ AggVault のシグナル × 自分のブローカーのデータの約定（`simulate_trades_hires` のシグナル側に AggVault の足、約定側の `exec_*` にそれより細かい会員の足を渡す。足の分数は `exec_bar_minutes`）。どれも下の「AggVault のバックテストは、まず GROSS」と「データの決まり」のとおり
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
 
@@ -30,17 +31,37 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 ### GROSS / NET の明示
 
 結果表示時は必ず GROSS（コストなし）か NET（コスト込み）かを明記すること。
-AggVault データでのバックテストはデフォルトで GROSS。「この結果はコスト未適用です。実際のブローカーコストを反映するには BrokerCost を使います」と一度は伝える。
+AggVault データでのバックテストはデフォルトで GROSS。「この結果はコスト未適用（GROSS）です。エッジが残るなら、次は自分のブローカーで再現するかを確かめる段です（コストを上乗せする / 自分のブローカーのデータで回す / AggVault のシグナル×自分のデータの約定）」と一度は伝える。
 
 ### 新規ユーザーのオンボーディング
 
 ユーザーが初めてバックテストを依頼してきたら:
 - AggVault APIキーの設定方法を案内（`export AGGVAULT_KEY=tk_your_key`）
 - 対応データ: 29銘柄（FX 28ペア + XAUUSD）、6タイムフレーム（1m/5m/15m/1h/4h/1d）、10年分
-- 1分足の長い期間は、fetch_aggvault が180日ずつに分けて自動で取る（1回の上限が50万本のため）。5年分で2〜3分かかる（同じキーで同時に取ると429の待ちが入る）。v0.5.xは1回で取っていて、1分足は最初の50万本（約1.3年分）で切れていた
-- 最初の1回は結果と一緒に「データは6ブローカーの中央値で構成された集約データです」と説明
+- 1分足の長い期間は、fetch_aggvault が180日ずつに分けて自動で取る（1回の上限が50万本のため）。5年分で数分かかる（同じキーで同時に取ると429の待ちが入る）。v0.5.xは1回で取っていて、1分足は最初の50万本（約1.3年分）で切れていた
+- 最初の1回は結果と一緒に「データは複数ブローカーの足を中央値で合成した集約データです」と説明
 
-## Commands
+### キーの扱い
+
+- キーは環境変数 `AGGVAULT_KEY` で渡す（`.env` を使うなら `.gitignore` に入れる）。戦略ファイル・スクリプト・ノートなど、作るファイルに書き込まない（`api_key=` に文字列で渡さない）。画面や質問に貼らない
+- 会員がキーをプロンプトに貼ってきたら、環境変数に入れるよう案内し、ファイルには書かない
+
+### 取得は1回
+
+- 取得は銘柄×足種×期間ごとに1回。`data/`（`.gitignore` で除外済み）に保存して（`np.savez` など）、2回目からはそれを読む。AggVault は本番のサービスで、取得が重なるとほかの会員が待たされる
+- audit に渡す戦略ファイルの頭（import されたときに走る所）で取得しない。取るなら `if __name__ == "__main__":` の中で（audit は回すたびにファイルを読み込む。`--seed 1` の回し直しでも取り直すことになる）
+
+### エンジン本体は書き換えない
+
+- 会員の戦略を検証するときは、エンジン本体（`backtest_engine/`）を書き換えない。戦略は別のファイルにする（本体を書き換えると `git pull` が衝突し、audit が前提にしている関数も変わる）
+- 足りない機能があれば、会員に運営への要望として伝えてもらう
+- 下の「開発者向け」の節（Commands・Numba 制約）は、エンジン本体を直す人のためのもの
+
+### 最新にする
+
+- `git pull` → `uv sync`。以後は `uv run ...` で動かす
+
+## 開発者向け: Commands
 
 ```bash
 uv run pytest                          # 全テスト実行
@@ -84,16 +105,18 @@ trade_timestamps は results の entry_bar で引く足の時刻（hires なら1
 
 ## Domain Rules
 
-### AggVault バックテストは GROSS 原則
+### AggVault のバックテストは、まず GROSS
 
-AggVault 集約データにブローカーコスト（スプレッド/手数料/スリッページ）を乗せるな。
-- AggVault = エッジ存在判定（GROSS）
-- ブローカー検証 = コスト適用（NET）
-- この2つは別ステップ
+- エッジの有無を見る段では GROSS（コストなし）。最初の結果にコストを乗せない
+- 会員が自分のコストで確かめたいと言ったら（「スプレッド1.5pips・スリッページ0.5pips追加でエッジ残る？」など）、断らない。会員にスプレッド・手数料・スリッページを聞いて `BrokerCost(spreads=..., commission_per_lot=..., pip_values=..., pip_sizes=...)` を作り（スリッページはスプレッドに足す）、`entry_costs=cost.per_trade_cost(...)` で NET を出して、NET と明記する
+- エッジの有無の判定（GROSS）と、自分のブローカーで再現するかの確認（NET・自分のデータ）は別の段。1つの結果の中で混ぜない
+- `BrokerCost.sample_ecn()`・`BrokerCost.sample_wide_spread()` はサンプル値で、どのブローカーの値でもない。会員の数字が無いまま、これを会員のコストとして NET を出さない
 
-### yfinance 使用禁止
+### データの決まり
 
-yfinance / Yahoo Finance のデータは一切使わない。価格データは AggVault API 経由のみ。
+- シグナルを作るデータは AggVault（`fetch_aggvault`）。yfinance / Yahoo Finance などの別のデータでシグナルを作らない
+- 約定の判定やコストの確認（自分のブローカーで再現するか）には、会員が用意した自分のブローカーのデータ（CSV を `load_ohlcv` で読む）を使ってよい。断らない
+- 別のデータで約定を判定するときは、時刻を UTC の足の始まりにそろえる。ブローカーの書き出しはサーバー時刻のことが多く、`load_ohlcv` はタイムゾーンの無い文字列を UTC として読む。ずれてもエラーにならず、シグナルと約定が黙ってずれる
 
 ### 約定の決まり（v0.6.0）
 
@@ -123,7 +146,7 @@ yfinance / Yahoo Finance のデータは一切使わない。価格データは 
 - backtest の中ではエンジンの simulate_trades / simulate_trades_hires を使う（硬貨投げの版は、そこで向きだけを入れ替えて作る）
 - 戦略ファイルの雛形（data の中身、signals の戻り値、1分足で回すときの `BAR_MINUTES`・`NULL_BARS`・`NULL_VOL`）と英語の手順は `AGENTS.md`（Claude 以外の AI も読む）。API の呼び方は README の Quick start と各節
 
-### Numba 制約
+### 開発者向け: Numba 制約
 
 - `simulate_trades` の中のカーネル（`_sim_*_inner`）と indicators は `@njit(cache=True)`
 - Numba 内で pandas, dict, list comprehension は使えない。numpy のみ

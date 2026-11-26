@@ -1,12 +1,13 @@
 """1h-only vs 1m-fill simulation of the same signals (the README numbers).
 
 EURUSD 2024, RSI(14) 30/70 reversal on 1h bars, SL 2xATR / TP 4xATR,
-max hold 48h. Runs each simulation GROSS and NET (Tradeview ILC costs).
+max hold 48h. Runs each simulation GROSS and NET (the sample ECN cost preset,
+not any broker's quote).
 
   export AGGVAULT_KEY=tk_your_key
   uv run python examples/rsi_reversal/compare_1h_vs_hires.py
 
-Fetches 1 year of 1m bars in 3 requests (~30-40 s).
+Fetches 1 year of 1m bars in 3 requests (under a minute).
 """
 
 import numpy as np
@@ -33,10 +34,10 @@ signal_bars = np.array(signal_bars, dtype=np.int32)
 directions = np.array(directions, dtype=np.int8)
 sl = atr_vals[signal_bars] * 2.0
 tp = atr_vals[signal_bars] * 4.0
-net_costs = BrokerCost.tradeview_ilc().per_trade_cost(["EURUSD"] * len(signal_bars), sl)
+net_costs = BrokerCost.sample_ecn().per_trade_cost(["EURUSD"] * len(signal_bars), sl)
 
 print(f"{len(signal_bars)} signals")
-for label, costs in (("GROSS", None), ("NET (Tradeview ILC)", net_costs)):
+for label, costs in (("GROSS", None), ("NET (sample ECN cost)", net_costs)):
     coarse = simulate_trades(
         h_1h, l_1h, c_1h, signal_bars, directions, sl, tp,
         max_hold=48, open_prices=o_1h, entry_costs=costs,
@@ -47,5 +48,5 @@ for label, costs in (("GROSS", None), ("NET (Tradeview ILC)", net_costs)):
         exec_timestamps=ts_1m, exec_opens=o_1m, exec_highs=h_1m,
         exec_lows=l_1m, exec_closes=c_1m, entry_costs=costs,
     )
-    print(f"{label:<20} 1h fills: PF={coarse.profit_factor:.3f}  "
+    print(f"{label:<22} 1h fills: PF={coarse.profit_factor:.3f}  "
           f"1m fills: PF={fine.profit_factor:.3f}")

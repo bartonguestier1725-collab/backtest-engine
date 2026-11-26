@@ -14,6 +14,9 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
    def backtest(data):  # the full pipeline on the same data
        ...              # signals -> simulate_trades(..., open_prices=data["open"])
        return results   # TradeResults
+
+   if __name__ == "__main__":  # fetch here, never at the top level (the audit imports this file on every run)
+       ...                     # load the saved file in data/, or fetch_aggvault once and np.savez it to data/
    ```
 
    Keep `signals` and `backtest` free of global state that depends on the data you fetched: the audit calls them on other data. Use the engine's `simulate_trades` / `simulate_trades_hires` inside `backtest` (the placebo flips directions there). Set `BAR_MINUTES` (and, for 1m data resampled inside the strategy, `NULL_BARS = 120_000` and `NULL_VOL = 0.00026`) as module constants when the defaults (60-minute bars, 5,000 bars) do not fit.
@@ -42,9 +45,28 @@ Instructions for AI coding assistants (Claude, ChatGPT, Codex, Cursor, etc.) tha
 
 ## Other rules
 
-- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m takes 2–3 minutes, mostly download time).
+- Use `simulate_trades_hires()` (1h signals, 1m fills) when the strategy is on 1h or coarser bars. Fetch 1m data with `fetch_aggvault`; long ranges are split into requests automatically (5 years of 1m takes a few minutes, mostly download time).
 - Pass `open_prices` to `simulate_trades` (next-bar-open entry). Without it, entry is at the signal bar's close (optimistic).
 - Run `GateKeeper` (with `bar_minutes` and `resolution_minutes`; `resolution_minutes=1` for `simulate_trades_hires`) and pass the simulation result to Gate 0: `gk.gate0_validate(trades=results, sl_distances=sl, avg_price=float(np.median(close)), timestamps=ts)` (`ts`: the times of every bar of the timeframe the signals were made on, not `ts[signal_bars]`; the 1h times also for `simulate_trades_hires`). Gate 0 checks trade count, entry on the previous trade's exit bar, missing SL, open-price entry and fixed costs. It does not look for look-ahead in signal code; that is what the audit is for. Gate 0 raises on an error; Gates 1–4 only return a result, so check `.passed` (see `examples/gatekeeper_pipeline.py`). Gate 0 takes the data period (BG-06) from the first and last of `ts` (if you also pass `n_bars` to `GateKeeper`, it must count the same bars). In the Gate 1–2 `run_func`, return `n_trades=results.n_filled` (`len(results)` also counts orders that never filled). For Gate 3, `evaluate_fn` must return the window's real metric (e.g. total R) and 0 for a window without trades; never a placeholder such as -999, which skews the WFA mean and the CSCV ranking.
-- State whether results are GROSS (no costs) or NET (`entry_costs` from `BrokerCost`).
-- Interpret PF: < 1.0 losing; 1.0–1.1 weak, likely gone after costs; 1.1–1.5 a possible edge, validate with GateKeeper; above 1.5 suspect look-ahead or overfitting first.
+- Interpret PF: < 1.0 losing; 1.0–1.1 weak, likely gone after costs; 1.1–1.5 a possible edge, validate with GateKeeper; above 1.5 suspect look-ahead or overfitting first. If total R is positive and max DD is more than half of it, say the drawdown is large and ask whether the user could sit through it live.
 - Timestamps are bar open times in UTC (Unix seconds).
+- After Gate 3 passes, propose the next step: does the result hold at the user's broker? (1) add the user's costs (NET, below); (2) run on the user's own broker data; (3) AggVault signals with fills on the user's data (`simulate_trades_hires`: AggVault bars as the signal side, the user's finer bars as `exec_*`, with `exec_bar_minutes`).
+
+## Data and costs
+
+- Signals come from AggVault data (`fetch_aggvault`). Do not build signals from other data (yfinance / Yahoo Finance or similar).
+- For fills and cost checks (does the result hold at the user's broker?), use the user's own broker data when they provide it (a CSV read with `load_ohlcv`). Do not refuse it. Align its times to UTC bar open times first: broker exports are often in server time, and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error; signals and fills silently stop lining up.
+- Test for an edge GROSS (no costs) first, and state in every result whether it is GROSS or NET. On the first result, say once that it is GROSS and that the next step is checking it at the user's broker (the three options above).
+- When the user asks whether the edge survives their costs (e.g. "1.5 pips spread plus 0.5 pips slippage"), do not refuse: ask for their spread, commission and slippage, build `BrokerCost(spreads=..., commission_per_lot=..., pip_values=..., pip_sizes=...)` (add slippage to the spread), pass `entry_costs=cost.per_trade_cost(...)`, and label the result NET. Keep the GROSS edge test and the NET broker check as separate steps.
+- `BrokerCost.sample_ecn()` and `BrokerCost.sample_wide_spread()` are sample values, not any broker's quote. Do not present a NET result from them as the user's costs.
+- The first time you show a result, tell the user that the data is aggregated: several brokers' bars combined by median.
+
+## API key and fetching
+
+- The AggVault key goes in the environment variable `AGGVAULT_KEY` (if a `.env` file holds it, list that file in `.gitignore`). Never write the key into a file you create (strategy files, scripts, notebooks; no string in `api_key=`), and do not echo it. If the user pastes the key into the chat, tell them to set the environment variable instead.
+- AggVault is a production service shared by all users. Fetch each symbol × timeframe × period once, save it under `data/` (in `.gitignore`), and load the saved file afterwards. Do not fetch at the top level of a strategy file: the audit imports the file on every run (and again for `--seed 1`).
+
+## Do not modify the engine
+
+- Do not edit the engine (`backtest_engine/`) to test a strategy. Put the strategy in its own file. Edits break `git pull` and can change functions the audit relies on. If a feature is missing, ask the user to send it as a request to the maintainers.
+- Install: `git clone`, then `uv sync`; run everything with `uv run`. Update: `git pull`, then `uv sync`.

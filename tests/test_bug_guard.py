@@ -13,9 +13,7 @@ from backtest_engine.bug_guard import (
     check_spread_filter,
     check_effective_no_sl,
     run_all_checks,
-    _FUNDORA_COST_PIPS,
-    _cost_pips_to_price,
-    _fundora_expected_costs,
+    _legacy_broker_expected_costs,
 )
 
 
@@ -66,12 +64,12 @@ class TestCheckCostRegistry:
         result = check_cost_registry(used, expected_costs=expected, tolerance=0.20)
         assert result.passed
 
-    def test_fundora_expected_costs_helper(self):
-        """_fundora_expected_costs() should delegate to BrokerCost.fundora().cost_prices()."""
+    def test_legacy_broker_expected_costs_helper(self):
+        """The deprecated broker= path uses BrokerCost.sample_wide_spread().cost_prices()."""
         from backtest_engine.costs import BrokerCost
 
-        costs = _fundora_expected_costs()
-        canonical = BrokerCost.fundora().cost_prices()
+        costs = _legacy_broker_expected_costs()
+        canonical = BrokerCost.sample_wide_spread().cost_prices()
         assert costs == canonical
         for pair, price in costs.items():
             assert price > 0
@@ -93,8 +91,8 @@ class TestRunAllChecksBackwardCompat:
             assert len(dep_warnings) == 1
             assert "broker" in str(dep_warnings[0].message)
 
-    def test_deprecated_broker_non_fundora_warns(self):
-        """Non-fundora broker should emit WARN for cost check (no expected_costs)."""
+    def test_deprecated_broker_unknown_name_warns(self):
+        """An unknown broker name should emit WARN for cost check (no expected_costs)."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             report = run_all_checks(

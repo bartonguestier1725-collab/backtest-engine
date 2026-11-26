@@ -115,7 +115,7 @@ class TestMonteCarloDD:
         # backward compat: daily_dd_ok should also exist
         assert isinstance(result["daily_dd_ok"], bool)
 
-    def test_fundora_check_deprecated(self, profitable_system):
+    def test_deprecated_prop_check_alias(self, profitable_system):
         mc = MonteCarloDD(profitable_system, n_sims=500, risk_pct=0.005, seed=42)
         mc.run()
         with warnings.catch_warnings(record=True) as w:
