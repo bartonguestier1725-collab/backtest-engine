@@ -21,22 +21,18 @@ do not change.
 
 ### Docs
 
-- CLAUDE.md, AGENTS.md: test GROSS first; when a user asks whether an edge
-  survives their costs, ask for their spread, commission and slippage and
-  report the result as NET (do not refuse). Signals come from AggVault data;
-  the user's own broker data may be used for fills and cost checks, with its
-  times aligned to UTC bar opens. After Gate 3, propose checking the result
-  at the user's broker. Keep the key in `AGGVAULT_KEY`, never in a file;
-  fetch each range once and save it, not at the top level of a strategy file
-  the audit imports; do not edit the engine to test a strategy. AGENTS.md now
-  carries all of these, the max-DD reading and the install/update steps.
-- README: a pointer to AGENTS.md / CLAUDE.md at the top; one install path
-  (`uv sync`) and how to update (`git pull`, `uv sync`); how to keep the key;
-  the cost examples pass your own `BrokerCost(...)`; aligning other data to
-  UTC bar opens; the PBO comment follows Gate 3 (fails above 0.40); fetch
-  times are given as "a few minutes" / "under a minute".
-- Examples: `gatekeeper_pipeline.py` runs GROSS (it now passes Gates 0-3 and
-  stops at Gate 4; its docstring says so) and drops the unmeasured per-gate
+- CLAUDE.md, AGENTS.md: rules for AI assistants on costs (GROSS first; NET
+  on the user's own numbers, not refused), data (the user's own broker data
+  may be used, aligned to UTC bar opens), the next step after Gate 3 (check
+  the result at the user's broker), the API key (environment or `.env` only),
+  fetching (once, saved; not at the top level of a strategy file) and not
+  editing the engine. AGENTS.md now carries these rules too.
+- README: pointer to AGENTS.md / CLAUDE.md; install with `uv sync` and update
+  with `git pull` + `uv sync`; cost examples with your own `BrokerCost(...)`;
+  `load_ohlcv` column names; the PBO comment follows Gate 3 (fails above
+  0.40); fetch times without unmeasured figures.
+- Examples: `gatekeeper_pipeline.py` runs GROSS with the default thresholds
+  (it passes Gates 0-3 and stops at Gate 4) and drops the unmeasured per-gate
   times; `example_strategy.py` passes example costs through the constructor;
   `level1_from_api.py` follows the README install steps.
 
@@ -180,7 +176,7 @@ with v0.5.x before relying on them.
   replaying those first 500,000 bars, 2,608 of 3,573 signals (73%) come back
   as `NO_FILL` with zero PnL, without any warning. Long 1m/5m/15m ranges are now fetched in windows (1m: 180 days),
   paced to the 10 requests/minute limit, with up to 2 retries on HTTP 429. The
-  tutorial now fills all 3,573 signals (1,861,388 1m bars, ~70 s). A windowed
+  tutorial now fills all 3,573 signals (1,861,388 1m bars). A windowed
   fetch of 2024 returned exactly the same bars as the single request.
 - **Stops filled at the stop price through gaps** — with `open_prices`, a stop
   (SL, breakeven, trailing, SAR hard stop) on a bar that opens beyond it now

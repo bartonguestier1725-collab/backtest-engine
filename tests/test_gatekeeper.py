@@ -129,6 +129,22 @@ class TestGate0:
         gk.gate0_validate()
 
 
+class TestDeprecatedBrokerKwarg:
+    def test_warns_once_and_sets_expected_costs(self):
+        """The deprecated broker= argument still fills expected_costs, with one warning."""
+        import warnings
+
+        from backtest_engine.costs import BrokerCost
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            gk = GateKeeper(strategy_name="t", broker="fundora")
+        dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(dep) == 1
+        assert "sample_wide_spread" in str(dep[0].message)
+        assert gk.expected_costs == BrokerCost.sample_wide_spread().cost_prices()
+
+
 class TestGate0TradeChecks:
     """Before v0.6.0 gate0_validate() took no trade data, so BG-01/06b/08/09b/
     12/14 never ran inside the pipeline."""

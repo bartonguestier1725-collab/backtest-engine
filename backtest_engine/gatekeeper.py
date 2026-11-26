@@ -115,7 +115,8 @@ class GateKeeper:
         if "broker" in kwargs:
             warnings.warn(
                 "broker parameter is deprecated. "
-                "Use expected_costs=BrokerCost.cost_prices() instead.",
+                "Use expected_costs=BrokerCost(...).cost_prices() with your own "
+                "costs (sample values: BrokerCost.sample_wide_spread()).",
                 DeprecationWarning,
                 stacklevel=2,
             )

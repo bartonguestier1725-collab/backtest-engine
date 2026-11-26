@@ -14,7 +14,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
    - Gate 1・2: run_func が返す `n_trades` は `results.n_filled`（`len(results)` は約定しなかった行も数える）
    - Gate 3: WalkForward・CSCV に渡す evaluate_fn は、窓の中の本当の値（合計 R など）を返し、取引が無い窓は 0。-999 のような目印は使わない（WFA の平均と CSCV の順位がゆがむ）
 4. **hires推奨**: 1h以上の粗い足でsimulate_tradesを使っている場合「1分足で約定シミュレーションすると精度が上がります（simulate_trades_hires）。試しますか？」
-5. **自分のブローカーで再現するか**: Gate 3 を通ったら、次の段を提案する。① 会員のスプレッド・手数料・スリッページを聞いてコストを上乗せする（NET） ② 会員が用意した自分のブローカーのデータで回す ③ AggVault のシグナル × 自分のブローカーのデータの約定（`simulate_trades_hires` のシグナル側に AggVault の足、約定側の `exec_*` にそれより細かい会員の足を渡す。足の分数は `exec_bar_minutes`）。どれも下の「AggVault のバックテストは、まず GROSS」と「データの決まり」のとおり
+5. **自分のブローカーで再現するか**: audit と GateKeeper の Gate 3 を通ったら、次の段を提案する。① 会員のスプレッド・手数料・スリッページを聞いてコストを上乗せする（NET） ② 会員が用意した自分のブローカーのデータで回す（シグナルもそのデータで作る） ③ AggVault のシグナル × 自分のブローカーのデータの約定。③ は、会員の足がシグナルより細かければ `simulate_trades_hires` のシグナル側に AggVault の足、約定側の `exec_*` に会員の足を渡す（足の分数は `exec_bar_minutes`）。同じ足種なら、シグナルの足の時刻で会員の足の番号を引き（`np.searchsorted`、時刻が一致したものだけ）、`simulate_trades` に会員の足と `open_prices` を渡す。どれも下の「AggVault のバックテストは、まず GROSS」と「データの決まり」のとおり
 
 ユーザーが知らない機能は存在しないのと同じ。使えるものは提案すること。
 
@@ -31,7 +31,7 @@ simulate_trades / simulate_trades_hires の結果が出たら、必ず以下を�
 ### GROSS / NET の明示
 
 結果表示時は必ず GROSS（コストなし）か NET（コスト込み）かを明記すること。
-AggVault データでのバックテストはデフォルトで GROSS。「この結果はコスト未適用（GROSS）です。エッジが残るなら、次は自分のブローカーで再現するかを確かめる段です（コストを上乗せする / 自分のブローカーのデータで回す / AggVault のシグナル×自分のデータの約定）」と一度は伝える。
+AggVault データでのバックテストはデフォルトで GROSS。「この結果はコスト未適用（GROSS）です。audit と GateKeeper を通ったら、次は自分のブローカーで再現するかを確かめます」と一度は伝える（確かめ方は上の5）。
 
 ### 新規ユーザーのオンボーディング
 
@@ -43,8 +43,8 @@ AggVault データでのバックテストはデフォルトで GROSS。「こ�
 
 ### キーの扱い
 
-- キーは環境変数 `AGGVAULT_KEY` で渡す（`.env` を使うなら `.gitignore` に入れる）。戦略ファイル・スクリプト・ノートなど、作るファイルに書き込まない（`api_key=` に文字列で渡さない）。画面や質問に貼らない
-- 会員がキーをプロンプトに貼ってきたら、環境変数に入れるよう案内し、ファイルには書かない
+- キーは環境変数 `AGGVAULT_KEY` で渡す。ファイルに置いてよいのは `.env`（`.gitignore` 済み）だけで、`uv run --env-file .env python ...` で読む。戦略ファイル・スクリプト・ノートには書かない（`api_key=` に文字列で渡さない）。返答やログに写さない
+- 会員がキーをプロンプトに貼ってきたら、`.env` に `AGGVAULT_KEY=...` の1行で保存して、以後はそこから読む（会員が自分で `export` してもよい）。会員には、キーを Discord などの質問やスクリーンショットに貼らないよう伝える
 
 ### 取得は1回
 
@@ -108,15 +108,17 @@ trade_timestamps は results の entry_bar で引く足の時刻（hires なら1
 ### AggVault のバックテストは、まず GROSS
 
 - エッジの有無を見る段では GROSS（コストなし）。最初の結果にコストを乗せない
-- 会員が自分のコストで確かめたいと言ったら（「スプレッド1.5pips・スリッページ0.5pips追加でエッジ残る？」など）、断らない。会員にスプレッド・手数料・スリッページを聞いて `BrokerCost(spreads=..., commission_per_lot=..., pip_values=..., pip_sizes=...)` を作り（スリッページはスプレッドに足す）、`entry_costs=cost.per_trade_cost(...)` で NET を出して、NET と明記する
+- 会員が自分のコストで確かめたいと言ったら（「スプレッド1.5pips・スリッページ0.5pips追加でエッジ残る？」など）、断らない。会員にスプレッド・手数料・スリッページを聞いて `BrokerCost(spreads=..., commission_per_lot=..., pip_values=..., pip_sizes=...)` を作り、`entry_costs=cost.per_trade_cost(...)` で NET を出して、NET と明記する
+  - `spreads` は価格の単位（pips × pip_size。EURUSD の 1.5 pips は 0.00015）で、1取引に1回引かれる。スリッページはスプレッドに足す（会員の数字が片道か、1取引の合計かを確かめる）
+  - `cost.cost_prices()` にその銘柄が入っているかを確かめる（`spreads` に無い銘柄のコストは黙って0になる）
 - エッジの有無の判定（GROSS）と、自分のブローカーで再現するかの確認（NET・自分のデータ）は別の段。1つの結果の中で混ぜない
 - `BrokerCost.sample_ecn()`・`BrokerCost.sample_wide_spread()` はサンプル値で、どのブローカーの値でもない。会員の数字が無いまま、これを会員のコストとして NET を出さない
 
 ### データの決まり
 
-- シグナルを作るデータは AggVault（`fetch_aggvault`）。yfinance / Yahoo Finance などの別のデータでシグナルを作らない
-- 約定の判定やコストの確認（自分のブローカーで再現するか）には、会員が用意した自分のブローカーのデータ（CSV を `load_ohlcv` で読む）を使ってよい。断らない
-- 別のデータで約定を判定するときは、時刻を UTC の足の始まりにそろえる。ブローカーの書き出しはサーバー時刻のことが多く、`load_ohlcv` はタイムゾーンの無い文字列を UTC として読む。ずれてもエラーにならず、シグナルと約定が黙ってずれる
+- シグナルを作るデータは AggVault（`fetch_aggvault`）が既定。会員が自分のブローカーのデータで回したい（自動提案の5の②）と言ったら、そのデータでシグナルも作ってよい。yfinance / Yahoo Finance などの公開データは使わない
+- 約定の判定やコストの確認（自分のブローカーで再現するか）には、会員が用意した自分のブローカーのデータを使ってよい。断らない。CSV は `load_ohlcv` で読む（列名が違えば `load_ohlcv(path, time_col="Date", open_col="Open", high_col="High", low_col="Low", close_col="Close", volume_col="Volume")`）
+- 別のデータを使うときは、時刻を UTC の足の始まりにそろえる。ブローカーの書き出しはサーバー時刻のことが多く、夏時間で GMT+2/+3 が切り替わることもある。`load_ohlcv` はタイムゾーンの無い文字列を UTC として読む。会員にサーバー時刻と夏時間の有無を聞き、分からなければ AggVault の1時間足と終値を突き合わせて、ずれの時間を確かめる。ずれてもエラーにならず、audit でも見つからない。シグナルと約定が黙ってずれる
 
 ### 約定の決まり（v0.6.0）
 

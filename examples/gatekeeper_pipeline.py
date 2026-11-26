@@ -3,12 +3,9 @@
 Demonstrates how a new user would validate a strategy through the 5 gates.
 Gates run in order and the pipeline stops at the first failed gate. The
 synthetic data is a random walk with a small upward drift, which long trades
-of a trend-following rule profit from. With the relaxed demo thresholds below
-it passes Gates 0-3 and stops at Gate 4: at 1% risk per trade, thousands of
-trades reach a drawdown above the 20% limit.
-
-NOTE: This example lowers Gate 2 thresholds for demonstration purposes.
-      With real data, always use the default thresholds or stricter.
+of a trend-following rule profit from. With the default thresholds it passes
+Gates 0-3 and stops at Gate 4: at 1% risk per trade, thousands of trades reach
+a drawdown above the 20% limit.
 
 The backtests are GROSS (no costs): the gates ask whether an edge exists.
 Whether it survives your broker's costs is a later step (BrokerCost).
@@ -110,11 +107,6 @@ def main():
         # GROSS: no spreads_used / expected_costs (GK-00 lists spreads_used as
         # missing; for a GROSS backtest that is expected)
     )
-    # Relax thresholds for demo (SMA crossover on synthetic data is weak)
-    # With real strategies, always use the defaults or stricter values
-    gk.GATE2_MIN_PF = 1.05   # default: 1.10
-    gk.GATE2_MIN_RF = 0.5    # default: 1.5
-    gk.GATE3_MAX_PBO = 0.60  # default: 0.40
 
     # Pass one real simulation so the trade-level checks run too
     # (entry on the previous exit bar, trade count, no-SL, open-price entry,

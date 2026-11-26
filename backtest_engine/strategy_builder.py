@@ -7,12 +7,9 @@ Solves:
   - Timezone conversion (user thinks in JST, data is UTC)
   - Market hours awareness (no Sunday 17:00 UTC bars)
   - Entry/exit bar matching with full accountability
-  - Silent trade loss prevention (reports every unmatched entry)
-
-Incident: 2026-04-01 Gold Rollover — 25% of entries silently dropped
-with no warning because exit bars didn't exist (market closed on
-weekends, Sunday market open gap). Users would have trusted the
-incomplete results.
+  - Silent trade loss prevention (reports every unmatched entry): when the
+    market is closed at the exit time (weekends, the Sunday open gap), an
+    entry has no exit bar and would otherwise be dropped without a warning.
 """
 
 from __future__ import annotations

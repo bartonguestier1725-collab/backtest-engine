@@ -569,11 +569,9 @@ def check_effective_no_sl(
 
     If median SL distance exceeds ``threshold`` fraction of the average price,
     the strategy has no meaningful downside protection.  Combined with coarse
-    bars (≥60min), intra-bar MAE is severely underestimated.
-
-    Incident: 2026-04-01 Gold Rollover — SL=None strategy on 1h bars hid
-    true max adverse excursion.  Backtest showed -1,014 pips max DD, but
-    real intra-bar drawdown was unknowable.
+    bars (≥60min), intra-bar MAE is severely underestimated: a strategy
+    without a stop on 1h bars reports a max DD from bar closes, while the
+    adverse moves inside the bars are unknown.
 
     Parameters
     ----------

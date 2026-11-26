@@ -39,7 +39,7 @@ uv run python my_strategy.py    # run everything with uv run
 
 To update: `git pull`, then `uv sync`.
 
-The AggVault API key goes in the environment variable `AGGVAULT_KEY` (`export AGGVAULT_KEY=tk_your_key`; if you keep it in a `.env` file, list that file in `.gitignore`). Do not write the key into strategy files, scripts or notebooks, and do not paste it into a chat or a question.
+The AggVault API key goes in the environment variable `AGGVAULT_KEY` (`export AGGVAULT_KEY=tk_your_key`), or in a `.env` file (already in `.gitignore`) read with `uv run --env-file .env python my_strategy.py`. Do not write the key into strategy files, scripts or notebooks, and do not paste it into questions or screenshots you share.
 
 > **Note:** NumPy is pinned to `numpy>=2.2,<2.4` to stay inside the range numba supports.
 
@@ -302,7 +302,7 @@ gk = GateKeeper(
     n_bars=len(close),             # bars of the signal timeframe (1h also with hires)
     bar_minutes=60,
     resolution_minutes=1,          # fills simulated on 1m bars (simulate_trades_hires)
-    spreads_used=spreads,
+    spreads_used=spreads,          # GROSS: leave out spreads_used and expected_costs
     source_path=__file__,
     expected_costs=cost.cost_prices(),   # cost = BrokerCost(...) with your broker's numbers
 )
@@ -481,6 +481,9 @@ from backtest_engine import load_ohlcv, fetch_aggvault
 
 # Option 1: From CSV file (time column: date strings, or epoch seconds/milliseconds)
 timestamps, opens, highs, lows, closes, volume = load_ohlcv("data.csv")
+# Other column names, e.g. a platform export:
+# load_ohlcv("broker.csv", time_col="Date", open_col="Open", high_col="High",
+#            low_col="Low", close_col="Close", volume_col="Volume")
 
 # Option 2: From AggVault API (ISO dates, no epoch math)
 #   export AGGVAULT_KEY=tk_your_key
@@ -495,7 +498,7 @@ Fetch each symbol × timeframe × period once and save it (e.g. `np.savez` into 
 
 The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes a few minutes, mostly download time (the pacing alone is about a minute; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
 
-All timestamps are bar open times in Unix seconds (UTC). When you use other data for fills (for example your broker's CSV with AggVault signals), align its times to UTC bar open times: broker exports are often in server time, and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error; signals and fills just stop lining up.
+All timestamps are bar open times in Unix seconds (UTC). When you use other data for fills (for example your broker's CSV with AggVault signals), align its times to UTC bar open times: broker exports are often in server time (which may switch between GMT+2 and GMT+3 with daylight saving time), and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error and the audit does not detect it; signals and fills just stop lining up. Comparing closes with AggVault 1h bars shows the offset.
 
 ## HTML Report Generation
 
@@ -568,7 +571,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Look-ahead the audit cannot see** — The [strategy audit](#strategy-audit) finds look-ahead that changes signals or creates an edge on random data. BugGuard only checks a few source patterns. Neither proves the absence of bias: a leak that never flips a signal, survivorship in the instrument list, and data errors are not covered. A strategy that looks too good usually has a leak.
 - **Portfolio effects** — Trades are simulated independently: no position overlap limits, margin, or account balance.
 - **Backtest-to-live gap** — Backtesting on aggregated multi-source data (e.g. AggVault median) gives cleaner signals than any single broker. A strategy that works on aggregated data may underperform on your broker's feed due to spread differences, requotes, and slippage. Always forward-test on your actual broker before going live.
-- **Slippage** — Not included in the `BrokerCost` sample values because it varies per user (colocation ≈ 0, retail ≈ 0.5-1+ pips). Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
+- **Slippage** — Not included in the `BrokerCost` sample values because it varies per user. Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
 - **Variable spreads** — `BrokerCost` uses static spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
 - **Swap/rollover costs** — Not modeled. For intraday strategies this is negligible. For multi-day holds, swap can erase thin edges.
 - **Execution latency** — The engine assumes instant fills at bar prices. In live trading, latency causes slippage, especially on fast moves.

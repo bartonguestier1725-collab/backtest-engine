@@ -229,8 +229,9 @@ def fetch_aggvault(
         raise ValueError(
             "AggVault API key required. Set the environment variable:\n"
             "  export AGGVAULT_KEY=tk_your_key\n"
-            "(or keep it in a .env file listed in .gitignore). Do not write the "
-            "key into a strategy file, script or notebook."
+            "or put AGGVAULT_KEY=tk_your_key in a .env file listed in .gitignore\n"
+            "and run with: uv run --env-file .env python ...\n"
+            "Do not write the key into a strategy file, script or notebook."
         )
 
     valid_tf = {"1m", "5m", "15m", "1h", "4h", "1d"}
