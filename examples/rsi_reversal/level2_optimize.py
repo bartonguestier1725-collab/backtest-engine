@@ -1,7 +1,7 @@
 """RSI Reversal Strategy — Level 2: Parameter Optimization.
 
-Level 1 showed RSI(14) 30/70 has a thin GROSS edge (PF≈1.10 on 1m fills),
-carried almost entirely by 2023.
+Level 1 showed RSI(14) 30/70 has a thin GROSS edge (PF≈1.10 on 1m fills,
+EURUSD 2021-04 – 2026-03, run with v0.6.0), carried almost entirely by 2023.
 Can we find better parameters?
 
 Grid search over:

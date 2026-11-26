@@ -1,6 +1,6 @@
 """RSI Reversal Strategy — Level 4: Structural Filters.
 
-Level 3 proved the optimized RSI alone is overfit (PBO≈88%).
+Level 3 showed the optimized RSI alone is overfit (PBO≈88%).
 Can structural filters create genuine edge?
 
 Filters tested:
