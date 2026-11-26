@@ -14,8 +14,9 @@ do not change.
 - The deprecated `broker=` argument of `run_all_checks` / `GateKeeper` and
   the deprecated prop-firm check method of `MonteCarloDD` still work; their
   warnings point to `BrokerCost(...).cost_prices()` and `prop_firm_check()`.
-- Removed an unused internal cost table from `bug_guard` (not used for
-  validation since v0.4.0).
+- Removed an unused internal cost table and its helpers from `bug_guard`
+  (not used for validation since v0.4.0). Code that imported them from
+  `bug_guard` now raises `ImportError`.
 - The missing-key error of `fetch_aggvault` names the environment variable
   `AGGVAULT_KEY` first, mentions `.env`, and says not to write the key into
   other files.

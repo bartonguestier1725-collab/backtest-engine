@@ -302,7 +302,7 @@ gk = GateKeeper(
     n_bars=len(close),             # bars of the signal timeframe (1h also with hires)
     bar_minutes=60,
     resolution_minutes=1,          # fills simulated on 1m bars (simulate_trades_hires)
-    spreads_used=spreads,          # GROSS: leave out spreads_used and expected_costs
+    spreads_used=cost.cost_prices(),     # NET: the costs you applied; GROSS: leave out both
     source_path=__file__,
     expected_costs=cost.cost_prices(),   # cost = BrokerCost(...) with your broker's numbers
 )
@@ -498,7 +498,7 @@ Fetch each symbol × timeframe × period once and save it (e.g. `np.savez` into 
 
 The API returns at most 500,000 bars per request. Long 1m/5m/15m ranges are fetched in several requests (1m: 180 days each, paced to the 10 requests/minute limit), so 5 years of 1m data takes a few minutes, mostly download time (the pacing alone is about a minute; fetching with the same key from two processes at once adds waits after HTTP 429). Before v0.6.0 a single request silently returned only the first 500,000 bars (about 1.3 years of 1m data). A request window with no data inside the range emits a `DataQualityWarning`.
 
-All timestamps are bar open times in Unix seconds (UTC). When you use other data for fills (for example your broker's CSV with AggVault signals), align its times to UTC bar open times: broker exports are often in server time (which may switch between GMT+2 and GMT+3 with daylight saving time), and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error and the audit does not detect it; signals and fills just stop lining up. Comparing closes with AggVault 1h bars shows the offset.
+All timestamps are bar open times in Unix seconds (UTC). When you use other data for fills (for example your broker's CSV with AggVault signals), align its times to UTC bar open times: broker exports are often in server time (which may switch between GMT+2 and GMT+3 with daylight saving time), and `load_ohlcv` reads date strings without a time zone as UTC. A shift raises no error and the audit does not detect it; signals and fills just stop lining up. Compare closes with AggVault 1h bars month by month to find the offset (it can change with daylight saving time).
 
 ## HTML Report Generation
 
@@ -571,7 +571,7 @@ Things this engine handles, and things it doesn't. Read before trusting any resu
 - **Look-ahead the audit cannot see** — The [strategy audit](#strategy-audit) finds look-ahead that changes signals or creates an edge on random data. BugGuard only checks a few source patterns. Neither proves the absence of bias: a leak that never flips a signal, survivorship in the instrument list, and data errors are not covered. A strategy that looks too good usually has a leak.
 - **Portfolio effects** — Trades are simulated independently: no position overlap limits, margin, or account balance.
 - **Backtest-to-live gap** — Backtesting on aggregated multi-source data (e.g. AggVault median) gives cleaner signals than any single broker. A strategy that works on aggregated data may underperform on your broker's feed due to spread differences, requotes, and slippage. Always forward-test on your actual broker before going live.
-- **Slippage** — Not included in the `BrokerCost` sample values because it varies per user. Estimate your own slippage and either add it to `spreads` or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
+- **Slippage** — Not included in the `BrokerCost` sample values because it varies per user. Estimate your own slippage and either add it to `spreads` (double a per-side figure: `spreads` is charged once per trade) or use `StressTest.run_all()` which includes a `cost_plus_01r` scenario (extra 0.1R per trade) to check if your edge survives higher costs.
 - **Variable spreads** — `BrokerCost` uses static spreads. Real spreads widen during news, low liquidity, and session boundaries. If your strategy trades during these times, backtest results will be more optimistic than live.
 - **Swap/rollover costs** — Not modeled. For intraday strategies this is negligible. For multi-day holds, swap can erase thin edges.
 - **Execution latency** — The engine assumes instant fills at bar prices. In live trading, latency causes slippage, especially on fast moves.
